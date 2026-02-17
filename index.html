@@ -1,0 +1,1961 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Xeno Launcher</title>
+    <style>
+        :root {
+            --bg-dark: #0a0a0f;
+            --bg-panel: #13131f;
+            --primary: #46f6ff;
+            --secondary: #2b6dff;
+            --text-main: #ffffff;
+            --text-dim: #8b9bb4;
+            --border: rgba(255,255,255, 0.1);
+            --success: #00ff88;
+            --error: #ff0055;
+            --radius: 12px;
+            --transition: all 0.3s ease;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+        
+        body, .sidebar, .nav-btn, .action-btn, .btn-secondary, .btn-danger, .btn-small, 
+        .version-chip, .play-btn, .close-modal, .tab-btn, .instance-display-btn, .add-instance-btn, .toast {
+            user-select: none; 
+            -webkit-user-select: none;
+        }
+
+        .custom-input, #avatar-upload, #skin-upload, .console-log {
+            user-select: text !important;
+            -webkit-user-select: text !important;
+        }
+        
+        body { 
+            background-color: var(--bg-dark); color: var(--text-main); height:100vh; overflow: hidden; 
+            display: flex; justify-content: center; align-items: center; 
+        }
+        
+        #app-container {
+            width: 100%; height: 100%; max-width: 1200px; max-height: 800px;
+            display: grid; grid-template-columns: 280px 1fr;
+            background: var(--bg-panel); border-radius: 0; 
+            box-shadow: 0 0 50px rgba(0,0,0,0.5); overflow: hidden; position: relative;
+        }
+        @media (min-width: 1200px) { 
+            #app-container { 
+                border-radius: var(--radius); height: 90vh; width: 90vw; border: 1px solid var(--border); 
+            } 
+        }
+        
+        .sidebar { background: rgba(0,0,0,0.2); padding: 20px; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
+        .brand { font-size: 24px; font-weight: 800; letter-spacing: 2px; color: var(--text-main); margin-bottom: 40px; display: flex; align-items: center; gap: 10px; text-shadow: 0 0 10px rgba(0, 240, 255, 0.5); }
+        .brand span { color: var(--primary); }
+        .nav-menu { list-style: none; flex: 1; }
+        .nav-item { margin-bottom: 10px; }
+        .nav-btn { width: 100%; padding: 12px 15px; background: transparent; border: none; color: var(--text-dim); text-align: left; cursor: pointer; border-radius: var(--radius); font-size: 15px; font-weight: 500; transition: var(--transition); display: flex; align-items: center; gap: 12px; }
+        .nav-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-main); }
+        .nav-btn.active { background: linear-gradient(90deg, rgba(0, 240, 255, 0.1), transparent); color: var(--primary); border-left:3px solid var(--primary); }
+        
+        .user-status { padding-top: 20px; border-top: 1px solid var(--border); }
+        .user-card { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: var(--radius); cursor: pointer; transition: var(--transition); border: 1px solid transparent; }
+        .user-card:hover { background: rgba(255,255,255,0.05); border-color: var(--primary); }
+        .user-avatar { width: 36px; height: 36px; background: #000; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .user-avatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
+        .user-avatar svg { width: 20px; height: 20px; fill: var(--text-dim); }
+        .user-info h4 { font-size: 14px; margin-bottom: 2px; }
+        .user-info p { font-size: 11px; color: var(--success); }
+
+        .main-content { position: relative; display: flex; flex-direction: column; overflow: hidden; }
+        .view-header { padding: 20px 30px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-panel); }
+        .view-title { font-size: 28px; font-weight: 300; }
+        .view-title b { font-weight: 700; color: var(--primary); }
+        .views-container { flex: 1; padding: 30px; overflow-y: auto; position: relative; background: var(--bg-dark); }
+        .view-section { display: none; animation: fadeIn 0.4s ease; }
+        .view-section.active { display: block; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .login-box { max-width: 400px; margin: 0 auto; background: rgba(255,255,255,0.05); padding: 30px; border-radius: var(--radius); border: 1px solid var(--border); text-align: center; }
+        .login-tabs { display: flex; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+        .tab-btn { flex: 1; background: none; border: none; padding: 10px; color: var(--text-dim); cursor: pointer; font-weight: 600; position: relative; }
+        .tab-btn.active { color: var(--text-main); }
+        .tab-btn.active::after { content: ''; position: absolute; bottom: -1px; left: 0; width: 100%; height: 2px; background: var(--primary); box-shadow: 0 0 10px var(--primary); }
+        .input-group { margin-bottom: 15px; text-align: left; }
+        .input-group label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom:5px; }
+        .custom-input { width: 100%; background: rgba(0,0,0,0.3); border: 1px solid var(--border); padding: 12px; border-radius: 6px; color: white; outline: none; transition: var(--transition); }
+        .custom-input:focus { border-color: var(--primary); box-shadow: 0 0 10px rgba(0, 240, 255, 0.2); }
+
+        .action-btn { width: 100%; padding: 12px; background: linear-gradient(45deg, var(--secondary), #00cfff); border: none; border-radius: 6px; color: white; font-weight: bold; cursor: pointer; transition: var(--transition); text-transform: uppercase; letter-spacing: 1px; }
+        .action-btn:hover { filter: brightness(1.2); transform: scale(1.02); }
+        .btn-secondary { 
+            background: rgba(70, 246, 255, 0.08);
+            border: 1px solid rgba(70, 246, 255, 0.25);
+            color: #d7f7ff;
+            text-transform: none; 
+        }
+        .btn-secondary:hover { 
+            background: rgba(70, 246, 255, 0.18);
+            border-color: rgba(70, 246, 255, 0.45);
+        }
+        .btn-danger { background: var(--error); text-transform: none; }
+        .btn-danger:hover { background: #d40047; }
+
+        .play-bar { height: 80px; background: rgba(0,0,0,0.4); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 30px; gap: 15px; backdrop-filter: blur(10px); }
+        .play-btn { width: 50px; height: 50px; border-radius: 50%; background: var(--success); border: none; color: #000; font-size: 24px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(0, 255, 136, 0.4); transition: var(--transition); }
+        .play-btn:hover { transform: scale(1.1) rotate(90deg); }
+        .ui-locked { opacity: 0.4; pointer-events: none; filter: grayscale(100%); cursor: not-allowed !important; }
+        .instance-selector-wrapper { display: flex; gap: 10px; flex: 1; max-width: 400px; }
+        .instance-display-btn { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--border); padding: 10px 15px; border-radius: 6px; color: white; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: var(--transition); text-align: left; }
+        .instance-display-btn:hover { border-color: var(--primary); background: rgba(0, 240, 255, 0.05); }
+        .instance-display-btn .label { font-size: 13px; color: var(--text-dim); }
+        .instance-display-btn .name { font-size: 14px; font-weight: bold; }
+        .add-instance-btn { width: 45px; height: 45px; border-radius: 6px; background: var(--primary); border: none; color: #000; font-size: 24px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: var(--transition); }
+        .add-instance-btn:hover { transform: scale(1.05); box-shadow: 0 0 15px rgba(0, 240, 255, 0.4); }
+
+        .modal-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); backdrop-filter: blur(5px); display: none; justify-content: center; align-items: center; z-index: 3000; }
+        .modal-content { background: var(--bg-panel); border: 1px solid var(--border); padding: 25px; border-radius: var(--radius); width: 100%; max-width: 520px; box-shadow: 0 0 50px rgba(0,0,0,0.8); animation: slideUp 0.3s ease; max-height: 85vh; display: flex; flex-direction: column; }
+        @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid var(--border); padding-bottom: 10px; flex-shrink: 0; }
+        .close-modal { background: none; border: none; color: var(--text-dim); font-size: 24px; cursor: pointer; }
+        .close-modal:hover { color: var(--error); }
+        .modal-body-scroll { overflow-y: auto; flex: 1; padding-right:5px; }
+
+        input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: transparent; user-select: none; }
+        input[type=range]:focus { outline: none; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 6px; cursor: pointer; background: rgba(255,255,255,0.1); border-radius:3px; }
+        input[type=range]::-webkit-slider-thumb { height: 20px; width: 20px; border-radius: 50%; background: var(--primary); cursor: pointer; -webkit-appearance: none; margin-top: -7px; box-shadow: 0 0 10px var(--primary); transition: transform 0.1s; }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.2); }
+
+        .settings-note { font-size: 12px; color: var(--text-dim); margin-top: 6px; }
+        .toggle-row { 
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            background: rgba(0,0,0,0.35); border: 1px solid var(--border);
+            padding: 10px 12px; border-radius: 8px;
+        }
+        .toggle-row span { font-size:13px; color: var(--text-main); }
+        .toggle { position: relative; width: 46px; height: 24px; }
+        .toggle input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; inset: 0; border-radius: 999px;
+            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12);
+            transition: 0.2s; box-shadow: inset 0 0 6px rgba(0,0,0,0.6);
+        }
+        .toggle-slider::before {
+            content: ""; position: absolute; width: 18px; height: 18px; left: 2px; top: 2px;
+            border-radius: 50%; background: #cfefff; transition: 0.2s;
+            box-shadow: 0 0 8px rgba(70,246,255,0.35);
+        }
+        .toggle input:checked + .toggle-slider {
+            background: linear-gradient(90deg, rgba(70,246,255,0.9), rgba(43,109,255,0.9));
+            border-color: rgba(70,246,255,0.6);
+            box-shadow: 0 0 12px rgba(70,246,255,0.35);
+        }
+        .toggle input:checked + .toggle-slider::before { transform: translateX(22px); background: #fff; }
+        .is-disabled { opacity: 0.5; }
+
+        .profile-section { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 15px; }
+        .profile-preview-box { width: 80px; height: 80px; background: #000; border: 2px dashed var(--border); border-radius: 8px; display: flex; justify-content: center; align-items: center; overflow: hidden; margin-bottom: 8px; position: relative; }
+        .profile-preview-box img { width: 100%; height: 100%; object-fit: cover; display: none; }
+        .profile-preview-box svg { width: 30px; height: 30px; fill: var(--text-dim); }
+        .preview-label { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; }
+        .file-upload-btn { padding: 6px 16px; font-size: 11px; background: rgba(255,255,255,0.05); border: 1px solid var(--border); color: white; border-radius: 4px; cursor: pointer; transition: 0.2s; }
+        .file-upload-btn:hover { background: var(--primary); color: #000; border-color: var(--primary); }
+        #avatar-upload, #skin-upload { display: none; }
+
+        /* Skin Section */
+        .skin-section { margin-top: 15px; padding-top: 12px; border-top: 1px solid var(--border); }
+        .skin-section-title { font-size: 13px; font-weight: 600; color: var(--text-main); margin-bottom: 10px; display: flex; align-items: center; gap: 6px; }
+        .skin-section-title svg { width: 16px; height: 16px; fill: var(--primary); }
+        .skin-preview-container { display: flex; gap: 15px; align-items: center; }
+        .skin-3d-wrapper { 
+            width: 200px; height: 300px; 
+            background: rgba(0,0,0,0.3); 
+            border: 1px solid var(--border); 
+            border-radius: 10px; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .skin-canvas { 
+            width: 100%; 
+            height: 100%; 
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+        }
+        .skin-3d-dom {
+            position: absolute;
+            inset: 0;
+            display: none;
+            perspective: 820px;
+            perspective-origin: 50% 42%;
+            pointer-events: none;
+        }
+        .skin-3d-stage {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            transform-style: preserve-3d;
+        }
+        .skin-model {
+            position: relative;
+            transform-style: preserve-3d;
+            will-change: transform;
+        }
+        .skin-part {
+            position: absolute;
+            transform-style: preserve-3d;
+        }
+        .skin-face {
+            position: absolute;
+            left: 0;
+            top: 0;
+            transform-style: preserve-3d;
+            transform-origin: center center;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            backface-visibility: hidden;
+            background-repeat: no-repeat;
+        }
+        .skin-3d-shadow {
+            position: absolute;
+            left: 50%;
+            bottom: 16px;
+            width: 98px;
+            height: 20px;
+            transform: translateX(-50%);
+            border-radius: 50%;
+            background: radial-gradient(ellipse at center, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.12) 65%, rgba(0,0,0,0) 100%);
+            filter: blur(1px);
+        }
+        .skin-controls { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+        .skin-model-mode { display: flex; flex-direction: column; gap: 6px; }
+        .skin-model-mode label { font-size: 11px; color: var(--text-dim); }
+        .skin-model-mode select {
+            background: rgba(0,0,0,0.35);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 7px 10px;
+            font-size: 11px;
+            outline: none;
+        }
+        .skin-model-mode select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(0, 240, 255, 0.15);
+        }
+        .skin-upload-area { display: flex; flex-direction: column; gap: 6px; }
+        .skin-info { font-size: 10px; color: var(--text-dim); background: rgba(0,0,0,0.2); padding: 6px 8px; border-radius: 4px; line-height: 1.3; }
+        .skin-current-status { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-dim); }
+        .skin-current-status.has-skin { color: var(--success); }
+        .skin-current-status svg { width: 12px; height: 12px; fill: currentColor; }
+        .btn-skin-upload { padding: 8px 12px; background: linear-gradient(135deg, var(--secondary), var(--primary)); border: none; border-radius: 4px; color: #000; font-weight: 600; font-size: 11px; cursor: pointer; transition: var(--transition); display: flex; align-items: center; justify-content: center; gap: 6px; }
+        .btn-skin-upload:hover { filter: brightness(1.1); transform: translateY(-1px); }
+        .btn-skin-upload svg { width: 14px; height: 14px; fill: currentColor; }
+        .btn-remove-skin { padding: 6px 10px; background: rgba(255, 0, 85, 0.1); border: 1px solid rgba(255, 0, 85, 0.3); border-radius: 4px; color: #ff6b8a; font-size: 10px; cursor: pointer; transition: var(--transition); }
+        .btn-remove-skin:hover { background: rgba(255, 0, 85, 0.2); }
+
+        #view-skins { max-width: 980px; }
+        #view-skins .skin-section {
+            margin-top: 18px;
+            padding: 18px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: rgba(255,255,255,0.03);
+        }
+        #view-skins .skin-section-title { font-size: 17px; margin-bottom: 14px; }
+        #view-skins .skin-section-title svg { width: 20px; height: 20px; }
+        #view-skins .skin-preview-container { gap: 24px; align-items: stretch; }
+        #view-skins .skin-controls { justify-content: center; gap: 12px; max-width: 340px; }
+        #view-skins .skin-model-mode label { font-size: 12px; }
+        #view-skins .skin-model-mode select { font-size: 12px; padding: 9px 11px; }
+        #view-skins .skin-info { font-size: 12px; padding: 8px 10px; }
+        #view-skins .btn-skin-upload { padding: 11px 14px; font-size: 13px; border-radius: 6px; }
+        #view-skins .btn-remove-skin { padding: 8px 12px; font-size: 12px; border-radius: 6px; }
+        #view-skins .skin-current-status { font-size: 13px; }
+        #view-skins .skin-current-status svg { width: 14px; height: 14px; }
+
+        .instance-list-item { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; transition: var(--transition); }
+        .instance-list-item:hover { background: rgba(255,255,255,0.06); border-color: var(--primary); }
+        .inst-info { display: flex; flex-direction: column; }
+        .inst-name { font-size: 16px; font-weight: bold; color: var(--text-main); }
+        .inst-ver { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+        .inst-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+        .inst-actions-row { display: flex; gap: 8px; }
+        .btn-small { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; border: 1px solid transparent; cursor: pointer; transition: 0.2s ease; background: rgba(255,255,255,0.04); color: #fff; }
+        .btn-small:focus-visible { outline: 2px solid rgba(0, 240, 255, 0.6); outline-offset: 2px; }
+        .btn-select { background: linear-gradient(135deg, rgba(43,109,255,0.95), rgba(70,246,255,0.65)); border-color: rgba(43,109,255,0.75); box-shadow: 0 0 12px rgba(43, 109, 255, 0.25); }
+        .btn-select:hover { filter: brightness(1.08); box-shadow: 0 0 14px rgba(43, 109, 255, 0.45); }
+        .btn-delete { background: rgba(255, 0, 85, 0.12); color: #ffd2df; border: 1px solid rgba(255, 0, 85, 0.6); }
+        .btn-delete:hover { background: rgba(255, 0, 85, 0.9); color: #fff; box-shadow: 0 0 12px rgba(255, 0, 85, 0.35); }
+        .btn-folder { background: rgba(0, 240, 255, 0.08); border: 1px solid rgba(0, 240, 255, 0.45); color: #d4fbff; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+        .btn-folder:hover { background: rgba(0, 240, 255, 0.2); color: #fff; box-shadow: 0 0 12px rgba(0, 240, 255, 0.35); }
+
+        .version-browser { display: flex; height: 250px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-top: 10px; }
+        .loader-sidebar { width: 35%; background: rgba(0,0,0,0.3); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow-y: auto; }
+        .loader-item { padding: 12px 15px; cursor: pointer; border-bottom: 1px solid var(--border); font-size: 13px; transition: 0.2s; display: flex; align-items: center; justify-content: space-between; }
+        .loader-item:hover { background: rgba(255,255,255,0.05); color: white; }
+        .loader-item.active { background: rgba(0, 240, 255, 0.15); color: var(--primary); border-left: 3px solid var(--primary); font-weight: bold; }
+        .version-content { flex: 1; padding: 10px; overflow-y: auto; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; align-content: start; }
+        .version-chip { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 8px 4px; text-align: center; border-radius: 4px; cursor: pointer; font-size: 11px; transition: 0.2s; color: var(--text-dim); }
+        .version-chip:hover { border-color: var(--primary); color: white; transform: translateY(-2px); }
+        .version-chip.selected { background: var(--secondary); border-color: var(--secondary); color: white; box-shadow: 0 0 10px rgba(43, 109, 255, 0.45); }
+
+        .progress-bar { width: 100%; height: 10px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin-top: 15px; }
+        .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--secondary)); transition: width 0.2s ease; }
+        .progress-text { font-size: 12px; color: var(--text-dim); margin-top: 8px; text-align: right; }
+        .spinner { width: 36px; height: 36px; border-radius: 50%; border: 3px solid rgba(255,255,255,0.15); border-top-color: var(--primary); margin: 20px auto 0; animation: spin 0.9s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        #toast-container { position: absolute; bottom: 100px; right: 30px; display: flex; flex-direction: column; gap: 10px; z-index: 4000; }
+        .toast { background: rgba(19, 19, 31, 0.95); border-left: 4px solid var(--primary); padding: 15px 20px; border-radius: 4px; box-shadow: 0 5px 15px rgba(0,0,0,0.5); color: white; font-size: 14px; min-width: 250px; animation: slideIn 0.3s ease; display: flex; align-items: center; gap: 10px; }
+        @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div id="app-container">
+        <nav class="sidebar">
+            <div class="brand">XENO <span>LAUNCHER</span></div>
+            <ul class="nav-menu">
+                <li class="nav-item"><button class="nav-btn active" data-view="home" onclick="switchView('home', event)">Inicio</button></li>
+                <li class="nav-item"><button class="nav-btn" data-view="settings" onclick="switchView('settings', event)">Configuraci&oacute;n</button></li>
+                <li class="nav-item"><button class="nav-btn" data-view="skins" onclick="switchView('skins', event)">Skins</button></li>
+            </ul>
+            <div class="user-status">
+                <div class="user-card" onclick="openModal('modal-profile')">
+                    <div class="user-avatar" id="sidebar-avatar-box">
+                        <svg viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4 4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                        <img id="sidebar-avatar-img" alt="Avatar">
+                    </div>
+                    <div class="user-info">
+                        <h4 id="display-username">Invitado</h4>
+                        <p id="account-type">No Conectado</p>
+                    </div>
+                </div>
+            </div>
+        </nav>
+        <main class="main-content">
+            <div class="view-header">
+                <div class="view-title" id="page-title">Bienvenido a <b>Xeno</b></div>
+                <div style="font-size: 12px; color: var(--text-dim);">v1.0.0 BETA</div>
+            </div>
+            <div class="views-container">
+                <section id="view-home" class="view-section active">
+                    <div id="login-panel" class="login-box">
+                        <h2 style="margin-bottom: 20px;">Iniciar Sesi&oacute;n</h2>
+                        <div class="login-tabs">
+                            <button class="tab-btn" onclick="setLoginMode('premium', event)">Premium</button>
+                            <button class="tab-btn active" onclick="setLoginMode('cracked', event)">No-Premium</button>
+                        </div>
+                        <div id="form-premium" style="display:none;"><p style="font-size: 11px; color: var(--text-dim);">Pr&oacute;ximamente.</p></div>
+                        <div id="form-cracked">
+                            <div class="input-group"><label>Usuario (Offline)</label><input type="text" id="offline-username" class="custom-input" placeholder="Ej: Steve"></div>
+                            <button class="action-btn" onclick="handleLogin('offline')">Jugar Offline</button>
+                        </div>
+                    </div>
+                    <div id="logged-panel" style="display: none; text-align: center; margin-top: 50px;">
+                        <h1>Gestiona tus Instancias</h1>
+                        <p style="color: var(--text-dim);">El juego se descargar&aacute; autom&aacute;ticamente al darle a Jugar.</p>
+                    </div>
+                    <h2 style="margin-top: 30px; margin-bottom: 12px; font-size: 18px; color: var(--text-main);">Novedades</h2>
+                    <div class="news-grid">
+                         <article class="news-card" style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
+                            <h3 style="color:white; margin-bottom:10px;">Sistema de Skins</h3>
+                            <p style="color:var(--text-dim);">Sube tu skin personalizada desde la secci&oacute;n Skins. Solo los usuarios de Xeno Launcher podran verla.</p>
+                        </article>
+                    </div>
+                </section>
+                <section id="view-settings" class="view-section">
+                    <div class="input-group">
+                        <label>Memoria RAM Asignada (GB): <span id="ram-value">4</span>GB</label>
+                        <input id="ram-range" type="range" min="2" max="16" step="1" value="4" oninput="updateRam(this.value)">
+                    </div>
+                    <div class="input-group" style="margin-top: 20px;">
+                        <label>Ruta de Java (Opcional)</label>
+                        <input type="text" class="custom-input" placeholder="Dejar vac&iacute;o" disabled style="cursor: not-allowed; opacity: 0.5;">
+                    </div>
+                    <div class="input-group" style="margin-top: 20px;">
+                        <label>Servicio de skins compartidas (URL)</label>
+                        <input type="text" id="skin-service-url" class="custom-input" placeholder="Vacio = modo local (sin servidor)">
+                    </div>
+                    <div class="input-group">
+                        <label>Token de escritura (opcional)</label>
+                        <input type="password" id="skin-service-token" class="custom-input" placeholder="Opcional">
+                    </div>
+                    <button class="action-btn" style="margin-top: 8px;" onclick="saveSkinServiceSettings()">Guardar servicio de skins</button>
+                    <p class="settings-note">Dejalo vacio para modo local. Solo completalo si quieres usar un servidor de skins compartidas.</p>
+                    <p style="font-size: 12px; color: var(--text-dim); margin-top: 10px;">Otras opciones estar&aacute;n disponibles en futuras versiones.</p>
+                </section>
+                <section id="view-skins" class="view-section">
+                    <h2 style="margin-bottom: 10px;">Skins</h2>
+                    <p style="color: var(--text-dim); margin-bottom: 16px;">
+                        Gestiona tu skin de Minecraft para tu perfil actual.
+                    </p>
+                    <div class="skin-section" style="margin-top: 0; padding-top: 0; border-top: none;">
+                        <div class="skin-section-title">
+                            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
+                            Skin de Minecraft
+                        </div>
+                        <div class="skin-preview-container">
+                            <div class="skin-3d-wrapper">
+                                <div id="skin-viewer-3d" class="skin-3d-dom"></div>
+                                <canvas id="skin-canvas" class="skin-canvas" width="200" height="300"></canvas>
+                            </div>
+                            <div class="skin-controls">
+                                <div class="skin-model-mode">
+                                    <label for="skin-model-mode">Modelo (compatibilidad)</label>
+                                    <select id="skin-model-mode" onchange="onSkinModelModeChange(this.value)">
+                                        <option value="auto">Auto (recomendado)</option>
+                                        <option value="classic">Classic (brazos 4px)</option>
+                                        <option value="slim">Slim / Alex (brazos 3px)</option>
+                                    </select>
+                                </div>
+                                <div class="skin-upload-area">
+                                    <label for="skin-upload" class="btn-skin-upload">
+                                        <svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg>
+                                        Subir Skin
+                                    </label>
+                                    <input type="file" id="skin-upload" accept="image/png" onchange="previewSkin(this)">
+                                    <div class="skin-info">PNG 64x64 o 64x32</div>
+                                </div>
+                                <div id="skin-status" class="skin-current-status">
+                                    <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+                                    <span id="skin-status-text">Sin skin</span>
+                                </div>
+                                <button id="btn-remove-skin" class="btn-remove-skin" style="display: none;" onclick="removeSkin()">Eliminar Skin</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+            <footer class="play-bar">
+                <button id="btn-play" class="play-btn ui-locked" onclick="requestLaunch()">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                </button>
+                <div class="instance-selector-wrapper">
+                    <div id="btn-select-instance" class="instance-display-btn ui-locked" onclick="openModal('modal-select-instance')">
+                        <div style="display: flex; flex-direction: column; justify-content: center;">
+                            <span class="label">Instancia</span>
+                            <span class="name" id="current-inst-name">Inicia sesi&oacute;n</span>
+                        </div>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </div>
+                    <button id="btn-add-instance" class="add-instance-btn ui-locked" onclick="openModal('modal-create-instance')">+</button>
+                </div>
+            </footer>
+        </main>
+
+        <!-- MODAL: PERFIL -->
+        <div id="modal-profile" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-header"><h3>Editar Perfil</h3><button class="close-modal" onclick="closeAllModals()">&times;</button></div>
+                <div class="profile-section">
+                    <span class="preview-label">Foto de Perfil</span>
+                    <div class="profile-preview-box" id="modal-avatar-box">
+                        <svg viewBox="0 0 24 24" id="modal-avatar-icon"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4 4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                        <img id="modal-avatar-img" alt="Avatar Preview">
+                    </div>
+                    <label for="avatar-upload" class="file-upload-btn">Subir Foto</label>
+                    <input type="file" id="avatar-upload" accept="image/*" onchange="previewImage(this)">
+                </div>
+                <div class="input-group">
+                    <label>Nombre de Usuario</label>
+                    <input type="text" id="profile-username-input" class="custom-input">
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 15px;">
+                    <button class="action-btn" onclick="saveProfile()">Guardar Cambios</button>
+                    <button class="action-btn btn-danger" onclick="logout()">Cerrar Sesi&oacute;n</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="modal-confirm-logout" class="modal-overlay">
+            <div class="modal-content" style="max-width: 420px;">
+                <div class="modal-header"><h3>&iquest;Cerrar sesi&oacute;n?</h3><button class="close-modal" onclick="confirmLogout(false)">&times;</button></div>
+                <p style="color: var(--text-dim);">Volver&aacute;s al modo invitado y se bloquear&aacute;n los botones de jugar hasta que inicies sesi&oacute;n otra vez.</p>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button class="action-btn btn-secondary" onclick="confirmLogout(false)">Cancelar</button>
+                    <button class="action-btn btn-danger" onclick="confirmLogout(true)">Cerrar Sesi&oacute;n</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="modal-confirm-delete" class="modal-overlay">
+            <div class="modal-content" style="max-width: 420px;">
+                <div class="modal-header"><h3>&iquest;Borrar instancia?</h3><button class="close-modal" onclick="confirmDelete(false)">&times;</button></div>
+                <p style="color: var(--text-dim);">Esta acci&oacute;n eliminar&aacute; la instancia de la lista.</p>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button class="action-btn btn-secondary" onclick="confirmDelete(false)">Cancelar</button>
+                    <button class="action-btn btn-danger" onclick="confirmDelete(true)">Borrar</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="modal-confirm-download" class="modal-overlay">
+            <div class="modal-content" style="max-width: 420px;">
+                <div class="modal-header"><h3>&iquest;Quieres descargar ahora?</h3><button class="close-modal" onclick="confirmDownload(null)">&times;</button></div>
+                <p style="color: var(--text-dim);">Si eliges "No", la instancia se crea pero la descarga ser&aacute; al darle a Jugar.</p>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button class="action-btn btn-secondary" onclick="confirmDownload(false)">No</button>
+                    <button class="action-btn" onclick="confirmDownload(true)">S&iacute;</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="modal-java-guide" class="modal-overlay">
+            <div class="modal-content" style="max-width: 520px;">
+                <div class="modal-header"><h3>Java requerido</h3><button class="close-modal" onclick="closeModal('modal-java-guide')">&times;</button></div>
+                <p id="java-guide-summary" style="color: var(--text-dim);"></p>
+                <div style="margin-top: 12px;">
+                    <p style="font-size: 12px; color: var(--text-dim); margin-bottom: 6px;">Compatibilidad:</p>
+                    <ul style="padding-left: 18px; color: var(--text-main); font-size: 13px; line-height: 1.5; margin-bottom: 10px;">
+                        <li>1.12 - 1.16 &rarr; Java 8</li>
+                        <li>1.17 &rarr; Java 16</li>
+                        <li>1.18 - 1.20.4 &rarr; Java 17</li>
+                        <li>1.20.5+ &rarr; Java 21</li>
+                    </ul>
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button class="action-btn btn-secondary" onclick="openExternal('https://adoptium.net/en-GB/installation/windows')">Abrir gu&iacute;a</button>
+                    <button class="action-btn" onclick="openExternal('https://adoptium.net/temurin/')">Descargas Temurin</button>
+                </div>
+            </div>
+        </div>
+        
+        <div id="modal-select-instance" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-header"><h3>Mis Instancias</h3><button class="close-modal" onclick="closeAllModals()">&times;</button></div>
+                <div class="modal-body-scroll" id="instance-list-container"></div>
+            </div>
+        </div>
+
+        <div id="modal-create-instance" class="modal-overlay">
+            <div class="modal-content">
+                <div class="modal-header"><h3>Crear Instancia</h3><button class="close-modal" onclick="closeAllModals()">&times;</button></div>
+                <div class="input-group"><label>Nombre</label><input type="text" id="new-instance-name" class="custom-input" placeholder="Ej: Mi Supervivencia"></div>
+                <label style="font-size: 12px; color: var(--text-dim);">Versi&oacute;n</label>
+                <div class="version-browser">
+                    <div class="loader-sidebar" id="loader-list"></div>
+                    <div class="version-content" id="version-list"></div>
+                </div>
+                <button class="action-btn" style="margin-top: 20px;" onclick="requestInstall()">Crear Instancia</button>
+            </div>
+        </div>
+
+        <div id="modal-installing" class="modal-overlay">
+            <div class="modal-content" style="text-align: center; max-width: 520px;">
+                <h3>Descargando Minecraft</h3>
+                <p id="install-stage" style="color: var(--text-dim);">Preparando descarga...</p>
+                <div class="progress-bar">
+                    <div id="install-progress-fill" class="progress-fill"></div>
+                </div>
+                <div id="install-progress-text" class="progress-text">0%</div>
+            </div>
+        </div>
+
+        <div id="modal-opening" class="modal-overlay">
+            <div class="modal-content" style="text-align: center; max-width: 520px;">
+                <h3>Abriendo Minecraft</h3>
+                <p style="color: var(--text-dim);">Esto puede tardar unos segundos.</p>
+                <div class="spinner"></div>
+            </div>
+        </div>
+        <div id="toast-container"></div>
+    </div>
+
+    <script>
+        const api = window.xeno;
+
+        let currentUser = null;
+        let ramSetting = 4;
+        let selectedVersion = null;
+        let selectedLoader = "Vanilla";
+        let currentInstanceId = null;
+        let instances = [];
+        let pendingDeleteId = null;
+        let pendingReturnModal = null;
+        let currentAvatarData = null;
+        let currentSkinData = null;
+        let installingInstanceId = null;
+        let pendingCreateData = null;
+        let skinServiceUrl = '';
+        let skinServiceToken = '';
+
+        let skinCanvas = null;
+        let skinCtx = null;
+        let skinViewer3D = null;
+        let skinModelEl = null;
+        let skinRotation = 0;
+        let skinAnimationId = null;
+        let currentSkinImg = null;
+        let currentSkinSlim = false;
+        let currentSkinScale = 1;
+        let currentSkinLegacy = false;
+        let skinModelMode = 'auto';
+        let skinFaceTextureCache = new Map();
+        let usernameCheckSeq = 0;
+        const pendingUsernameChecks = new Map();
+        let loginBusy = false;
+
+        const SKIN_MODEL_UNIT = 6;
+
+        function elemLabel(el) {
+            if (!el) return null;
+            const id = el.id ? `#${el.id}` : '';
+            const name = el.name ? `[name=${el.name}]` : '';
+            return `${el.tagName}${id}${name}`;
+        }
+
+        function isTextInput(el) {
+            if (!el) return false;
+            const tag = el.tagName;
+            return tag === 'INPUT' || tag === 'TEXTAREA';
+        }
+
+        function logFocus(tag, extra = {}) {
+            if (!api || !api.send) return;
+            const payload = {
+                tag,
+                hasFocus: document.hasFocus(),
+                active: elemLabel(document.activeElement),
+                time: new Date().toISOString(),
+                ...extra
+            };
+            api.send('focus-debug', payload);
+        }
+
+        function applyAvatar(dataUrl) {
+            const has = !!dataUrl;
+            const modalImg = document.getElementById('modal-avatar-img');
+            const modalIcon = document.getElementById('modal-avatar-icon');
+            const sidebarImg = document.getElementById('sidebar-avatar-img');
+            const sidebarIcon = document.querySelector('#sidebar-avatar-box svg');
+
+            if (modalImg) {
+                if (has) {
+                    modalImg.src = dataUrl;
+                    modalImg.style.display = 'block';
+                } else {
+                    modalImg.removeAttribute('src');
+                    modalImg.style.display = 'none';
+                }
+            }
+            if (modalIcon) modalIcon.style.display = has ? 'none' : 'block';
+
+            if (sidebarImg) {
+                if (has) {
+                    sidebarImg.src = dataUrl;
+                    sidebarImg.style.display = 'block';
+                } else {
+                    sidebarImg.removeAttribute('src');
+                    sidebarImg.style.display = 'none';
+                }
+            }
+            if (sidebarIcon) sidebarIcon.style.display = has ? 'none' : 'block';
+        }
+
+        function applyProfile(profile) {
+            if (profile && profile.name) {
+                currentUser = String(profile.name).trim();
+                currentAvatarData = profile.avatarData || null;
+                currentSkinData = profile.skinData || null;
+                if (profile.skinModel === 'slim') currentSkinSlim = true;
+                else if (profile.skinModel === 'classic') currentSkinSlim = false;
+
+                document.getElementById('display-username').innerText = currentUser;
+                document.getElementById('account-type').innerText = "Cuenta Offline";
+                document.getElementById('profile-username-input').value = currentUser;
+                document.getElementById('offline-username').value = currentUser;
+
+                document.getElementById('login-panel').style.display = 'none';
+                document.getElementById('logged-panel').style.display = 'block';
+
+                applyAvatar(currentAvatarData);
+                updateSkinStatus();
+                loadSkinImage(currentSkinData);
+            } else {
+                currentUser = null;
+                currentAvatarData = null;
+                currentSkinData = null;
+                currentSkinSlim = false;
+                currentSkinScale = 1;
+                currentSkinLegacy = false;
+
+                document.getElementById('display-username').innerText = "Invitado";
+                document.getElementById('account-type').innerText = "No Conectado";
+                document.getElementById('profile-username-input').value = '';
+                document.getElementById('offline-username').value = '';
+
+                document.getElementById('login-panel').style.display = 'block';
+                document.getElementById('logged-panel').style.display = 'none';
+
+                applyAvatar(null);
+                updateSkinStatus();
+                currentSkinImg = null;
+                rebuildSkinModel3D();
+                syncSkinPreviewMode();
+            }
+            updateUIState();
+        }
+
+        window.addEventListener('focus', () => logFocus('window-focus'));
+        window.addEventListener('blur', () => logFocus('window-blur'));
+        document.addEventListener('visibilitychange', () => {
+            logFocus('visibility', { state: document.visibilityState });
+        });
+        document.addEventListener('focusin', (e) => {
+            if (isTextInput(e.target)) logFocus('focusin', { target: elemLabel(e.target) });
+        });
+        document.addEventListener('focusout', (e) => {
+            if (isTextInput(e.target)) logFocus('focusout', { target: elemLabel(e.target) });
+        });
+
+        const versionData = { 
+            "Vanilla": ["1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21", "1.20.6", "1.20.5", "1.20.4", "1.20.3", "1.20.2", "1.20.1", "1.20", "1.19.4", "1.19.3", "1.19.2", "1.19.1", "1.19", "1.18.2", "1.18.1", "1.18", "1.17.1", "1.17", "1.16.5", "1.16.4", "1.16.3", "1.16.2", "1.16.1", "1.16", "1.15.2", "1.15.1", "1.15", "1.14.4", "1.14.3", "1.14.2", "1.14.1", "1.14", "1.13.2", "1.13.1", "1.13", "1.12.2", "1.12.1", "1.12", "1.11.2", "1.11.1", "1.11", "1.10.2", "1.10.1", "1.10", "1.9.4", "1.9.3", "1.9.2", "1.9.1", "1.9", "1.8.9", "1.8.8", "1.8.7", "1.8.6", "1.8.5", "1.8.4", "1.8.3", "1.8.2", "1.8.1", "1.8", "1.7.10", "1.7.9", "1.7.8", "1.7.5", "1.7.4", "1.7.2", "1.6.4", "1.6.2", "1.6.1", "1.5.2", "1.4.7", "1.3.2", "1.2.5"],
+            "Snapshots": [],
+            "Fabric": ["1.21.4", "1.21", "1.20.4", "1.20.2", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.14.4", "1.12.2"],
+            "Forge": ["1.21", "1.20.4", "1.20.2", "1.20.1", "1.19.4", "1.18.2", "1.16.5", "1.12.2", "1.8.9", "1.7.10"],
+            "NeoForge": ["1.21.4", "1.21", "1.20.4", "1.20.2", "1.19.4", "1.18.2"]
+        };
+
+        // ============================================
+        // SISTEMA DE RENDERIZADO DE SKINS - CORREGIDO
+        // ============================================
+
+        const SKIN_UV = {
+            head: {
+                base: { top: [8, 0], bottom: [16, 0], left: [16, 8], front: [8, 8], right: [0, 8], back: [24, 8] },
+                overlay: { top: [40, 0], bottom: [48, 0], left: [48, 8], front: [40, 8], right: [32, 8], back: [56, 8] }
+            },
+            body: {
+                base: { top: [20, 16], bottom: [28, 16], left: [28, 20], front: [20, 20], right: [16, 20], back: [32, 20] },
+                overlay: { top: [20, 32], bottom: [28, 32], left: [28, 36], front: [20, 36], right: [16, 36], back: [32, 36] }
+            },
+            rightArm: {
+                base: { top: [44, 16], bottom: [48, 16], left: [48, 20], front: [44, 20], right: [40, 20], back: [52, 20] },
+                overlay: { top: [44, 32], bottom: [48, 32], left: [48, 36], front: [44, 36], right: [40, 36], back: [52, 36] }
+            },
+            rightArmSlim: {
+                base: { top: [44, 16], bottom: [47, 16], left: [47, 20], front: [44, 20], right: [40, 20], back: [50, 20] },
+                overlay: { top: [44, 32], bottom: [47, 32], left: [47, 36], front: [44, 36], right: [40, 36], back: [50, 36] }
+            },
+            leftArm: {
+                base: { top: [36, 48], bottom: [40, 48], left: [40, 52], front: [36, 52], right: [32, 52], back: [44, 52] },
+                overlay: { top: [52, 48], bottom: [56, 48], left: [56, 52], front: [52, 52], right: [48, 52], back: [60, 52] }
+            },
+            leftArmSlim: {
+                base: { top: [36, 48], bottom: [39, 48], left: [39, 52], front: [36, 52], right: [32, 52], back: [42, 52] },
+                overlay: { top: [52, 48], bottom: [55, 48], left: [55, 52], front: [52, 52], right: [48, 52], back: [58, 52] }
+            },
+            rightLeg: {
+                base: { top: [4, 16], bottom: [8, 16], left: [8, 20], front: [4, 20], right: [0, 20], back: [12, 20] },
+                overlay: { top: [4, 32], bottom: [8, 32], left: [8, 36], front: [4, 36], right: [0, 36], back: [12, 36] }
+            },
+            leftLeg: {
+                base: { top: [20, 48], bottom: [24, 48], left: [24, 52], front: [20, 52], right: [16, 52], back: [28, 52] },
+                overlay: { top: [4, 48], bottom: [8, 48], left: [8, 52], front: [4, 52], right: [0, 52], back: [12, 52] }
+            }
+        };
+
+        function initSkinCanvas() {
+            skinCanvas = document.getElementById('skin-canvas');
+            skinViewer3D = document.getElementById('skin-viewer-3d');
+            const skinModeSelect = document.getElementById('skin-model-mode');
+            if (skinCanvas) {
+                skinCtx = skinCanvas.getContext('2d');
+                skinCtx.imageSmoothingEnabled = false;
+            }
+            if (skinModeSelect) skinModeSelect.value = skinModelMode;
+            rebuildSkinModel3D();
+            syncSkinPreviewMode();
+            startSkinAnimation();
+        }
+
+        function syncSkinPreviewMode() {
+            const use3D = !!(currentSkinImg && skinViewer3D && skinModelEl);
+            if (skinCanvas) skinCanvas.style.display = use3D ? 'none' : 'block';
+            if (skinViewer3D) skinViewer3D.style.display = use3D ? 'block' : 'none';
+        }
+
+        function startSkinAnimation() {
+            if (skinAnimationId) cancelAnimationFrame(skinAnimationId);
+
+            function animate() {
+                skinRotation += 1;
+                if (skinModelEl && currentSkinImg) {
+                    const spin = skinRotation * 0.55;
+                    const bob = Math.sin(skinRotation * 0.03) * 2.2;
+                    const baseX = 0;
+                    const baseY = -(8 * SKIN_MODEL_UNIT) + bob + 10;
+                    skinModelEl.style.transform = `translate3d(${baseX}px, ${baseY}px, 0px) rotateX(-10deg) rotateY(${spin}deg)`;
+                    syncSkinPreviewMode();
+                } else {
+                    syncSkinPreviewMode();
+                    drawSkin();
+                }
+                skinAnimationId = requestAnimationFrame(animate);
+            }
+            animate();
+        }
+
+        function getLegacyOrCurrent(partKey, layerKey, isLegacy32) {
+            if (!isLegacy32) return SKIN_UV[partKey][layerKey];
+            if (partKey === 'leftArm') return SKIN_UV.rightArm[layerKey];
+            if (partKey === 'leftLeg') return SKIN_UV.rightLeg[layerKey];
+            return SKIN_UV[partKey][layerKey];
+        }
+
+        function getSkinFormatInfo(width, height) {
+            const w = Number(width);
+            const h = Number(height);
+            if (!Number.isFinite(w) || !Number.isFinite(h)) return null;
+            if (w <= 0 || h <= 0 || w % 64 !== 0) return null;
+            const scale = w / 64;
+            if (!Number.isInteger(scale) || scale < 1) return null;
+            if (h === 64 * scale) {
+                return { scale, legacy32: false };
+            }
+            if (h === 32 * scale) {
+                return { scale, legacy32: true };
+            }
+            return null;
+        }
+
+        function detectSlimModel(img, scale = 1) {
+            if (!img || !scale || img.height !== 64 * scale) return false;
+            try {
+                const probe = document.createElement('canvas');
+                probe.width = img.width;
+                probe.height = img.height;
+                const pctx = probe.getContext('2d', { willReadFrequently: true });
+                pctx.drawImage(img, 0, 0, img.width, img.height);
+                const data = pctx.getImageData(0, 0, img.width, img.height).data;
+                const alphaAt = (x, y) => data[(y * img.width + x) * 4 + 3];
+
+                // Zonas que deben quedar vacias en modelo slim.
+                const probes = [
+                    { x1: 54, x2: 55, y1: 20, y2: 31 }, // brazo derecho base
+                    { x1: 54, x2: 55, y1: 36, y2: 47 }, // brazo derecho overlay
+                    { x1: 46, x2: 47, y1: 52, y2: 63 }, // brazo izquierdo base
+                    { x1: 62, x2: 63, y1: 52, y2: 63 }  // brazo izquierdo overlay
+                ];
+
+                for (const r of probes) {
+                    for (let by = r.y1; by <= r.y2; by++) {
+                        for (let bx = r.x1; bx <= r.x2; bx++) {
+                            for (let sy = 0; sy < scale; sy++) {
+                                for (let sx = 0; sx < scale; sx++) {
+                                    const x = bx * scale + sx;
+                                    const y = by * scale + sy;
+                                    if (alphaAt(x, y) > 0) return false;
+                                }
+                            }
+                        }
+                    }
+                }
+                return true;
+            } catch {
+                return false;
+            }
+        }
+
+        function resolveCurrentSlimMode(isLegacy32) {
+            if (isLegacy32) return false;
+            if (skinModelMode === 'slim') return true;
+            if (skinModelMode === 'classic') return false;
+            return !!currentSkinSlim;
+        }
+
+        function onSkinModelModeChange(mode) {
+            if (!['auto', 'classic', 'slim'].includes(mode)) mode = 'auto';
+            skinModelMode = mode;
+            rebuildSkinModel3D();
+            syncSkinPreviewMode();
+        }
+
+        function getFaceTextureDataUrl(img, sx, sy, sw, sh, scale = 1) {
+            if (!img) return null;
+            const key = `${sx},${sy},${sw},${sh},${scale}`;
+            if (skinFaceTextureCache.has(key)) return skinFaceTextureCache.get(key);
+
+            const srcX = sx * scale;
+            const srcY = sy * scale;
+            const srcW = sw * scale;
+            const srcH = sh * scale;
+
+            const faceCanvas = document.createElement('canvas');
+            faceCanvas.width = srcW;
+            faceCanvas.height = srcH;
+            const fctx = faceCanvas.getContext('2d');
+            fctx.imageSmoothingEnabled = false;
+            fctx.clearRect(0, 0, srcW, srcH);
+            fctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+            const dataUrl = faceCanvas.toDataURL('image/png');
+            skinFaceTextureCache.set(key, dataUrl);
+            return dataUrl;
+        }
+
+        function buildFace(img, sx, sy, sw, sh, faceWpx, faceHpx, transformCss) {
+            const face = document.createElement('div');
+            face.className = 'skin-face';
+            face.style.width = `${faceWpx}px`;
+            face.style.height = `${faceHpx}px`;
+            face.style.left = `${-faceWpx / 2}px`;
+            face.style.top = `${-faceHpx / 2}px`;
+            face.style.transform = transformCss;
+            const faceUrl = getFaceTextureDataUrl(img, sx, sy, sw, sh, currentSkinScale);
+            if (faceUrl) {
+                face.style.backgroundImage = `url('${faceUrl}')`;
+                face.style.backgroundSize = '100% 100%';
+                face.style.backgroundPosition = 'center center';
+            }
+            return face;
+        }
+
+        function createSkinCube(part, img) {
+            const u = SKIN_MODEL_UNIT;
+            const inflate = part.inflate || 0;
+            const wPx = (part.w + inflate * 2) * u;
+            const hPx = (part.h + inflate * 2) * u;
+            const dPx = (part.d + inflate * 2) * u;
+
+            const cube = document.createElement('div');
+            cube.className = 'skin-part';
+            cube.style.transform = `translate3d(${part.x * u}px, ${part.y * u}px, ${part.z * u}px)`;
+
+            const uv = part.uv;
+
+            cube.appendChild(buildFace(img, uv.front[0], uv.front[1], part.w, part.h, wPx, hPx, `translateZ(${dPx / 2}px)`));
+            cube.appendChild(buildFace(img, uv.back[0], uv.back[1], part.w, part.h, wPx, hPx, `rotateY(180deg) translateZ(${dPx / 2}px)`));
+            cube.appendChild(buildFace(img, uv.right[0], uv.right[1], part.d, part.h, dPx, hPx, `rotateY(90deg) translateZ(${wPx / 2}px)`));
+            cube.appendChild(buildFace(img, uv.left[0], uv.left[1], part.d, part.h, dPx, hPx, `rotateY(-90deg) translateZ(${wPx / 2}px)`));
+            cube.appendChild(buildFace(img, uv.top[0], uv.top[1], part.w, part.d, wPx, dPx, `rotateX(90deg) translateZ(${hPx / 2}px)`));
+            cube.appendChild(buildFace(img, uv.bottom[0], uv.bottom[1], part.w, part.d, wPx, dPx, `rotateX(-90deg) translateZ(${hPx / 2}px)`));
+
+            return cube;
+        }
+
+        function rebuildSkinModel3D() {
+            if (!skinViewer3D) return;
+
+            skinViewer3D.innerHTML = '';
+            skinModelEl = null;
+            skinFaceTextureCache.clear();
+
+            if (!currentSkinImg || !currentSkinData) return;
+
+            const isLegacy32 = !!currentSkinLegacy;
+            const slimModel = resolveCurrentSlimMode(isLegacy32);
+
+            const shadow = document.createElement('div');
+            shadow.className = 'skin-3d-shadow';
+            skinViewer3D.appendChild(shadow);
+
+            const stage = document.createElement('div');
+            stage.className = 'skin-3d-stage';
+            skinViewer3D.appendChild(stage);
+
+            const model = document.createElement('div');
+            model.className = 'skin-model';
+            stage.appendChild(model);
+            skinModelEl = model;
+
+            const armWidth = slimModel ? 3 : 4;
+            const rightArmUvBase = isLegacy32
+                ? SKIN_UV.rightArm.base
+                : (slimModel ? SKIN_UV.rightArmSlim.base : SKIN_UV.rightArm.base);
+            const rightArmUvOverlay = isLegacy32
+                ? SKIN_UV.rightArm.overlay
+                : (slimModel ? SKIN_UV.rightArmSlim.overlay : SKIN_UV.rightArm.overlay);
+            const leftArmUvBase = isLegacy32
+                ? SKIN_UV.rightArm.base
+                : (slimModel ? SKIN_UV.leftArmSlim.base : SKIN_UV.leftArm.base);
+            const leftArmUvOverlay = isLegacy32
+                ? SKIN_UV.rightArm.overlay
+                : (slimModel ? SKIN_UV.leftArmSlim.overlay : SKIN_UV.leftArm.overlay);
+            const rightArmX = slimModel ? -5.5 : -6;
+            const leftArmX = slimModel ? 5.5 : 6;
+
+            const baseParts = [
+                { x: 0, y: -4, z: 0, w: 8, h: 8, d: 8, uv: getLegacyOrCurrent('head', 'base', isLegacy32) },
+                { x: 0, y: 6, z: 0, w: 8, h: 12, d: 4, uv: getLegacyOrCurrent('body', 'base', isLegacy32) },
+                { x: rightArmX, y: 6, z: 0, w: armWidth, h: 12, d: 4, uv: rightArmUvBase },
+                { x: leftArmX, y: 6, z: 0, w: armWidth, h: 12, d: 4, uv: leftArmUvBase },
+                { x: -2, y: 18, z: 0, w: 4, h: 12, d: 4, uv: getLegacyOrCurrent('rightLeg', 'base', isLegacy32) },
+                { x: 2, y: 18, z: 0, w: 4, h: 12, d: 4, uv: getLegacyOrCurrent('leftLeg', 'base', isLegacy32) }
+            ];
+            baseParts.forEach((part) => model.appendChild(createSkinCube(part, currentSkinImg)));
+
+            if (!isLegacy32) {
+                const overlayParts = [
+                    { x: 0, y: -4, z: 0, w: 8, h: 8, d: 8, uv: SKIN_UV.head.overlay, inflate: 0.25 },
+                    { x: 0, y: 6, z: 0, w: 8, h: 12, d: 4, uv: SKIN_UV.body.overlay, inflate: 0.25 },
+                    { x: rightArmX, y: 6, z: 0, w: armWidth, h: 12, d: 4, uv: rightArmUvOverlay, inflate: 0.25 },
+                    { x: leftArmX, y: 6, z: 0, w: armWidth, h: 12, d: 4, uv: leftArmUvOverlay, inflate: 0.25 },
+                    { x: -2, y: 18, z: 0, w: 4, h: 12, d: 4, uv: SKIN_UV.rightLeg.overlay, inflate: 0.25 },
+                    { x: 2, y: 18, z: 0, w: 4, h: 12, d: 4, uv: SKIN_UV.leftLeg.overlay, inflate: 0.25 }
+                ];
+                overlayParts.forEach((part) => model.appendChild(createSkinCube(part, currentSkinImg)));
+            }
+        }
+
+        function loadSkinImage(base64Data) {
+            if (!base64Data) {
+                currentSkinImg = null;
+                currentSkinSlim = false;
+                currentSkinScale = 1;
+                currentSkinLegacy = false;
+                rebuildSkinModel3D();
+                syncSkinPreviewMode();
+                return;
+            }
+
+            const img = new Image();
+            img.onload = function() {
+                const info = getSkinFormatInfo(img.width, img.height);
+                if (!info) {
+                    console.error('Skin dimensions invalid:', img.width, 'x', img.height);
+                    currentSkinImg = null;
+                    currentSkinSlim = false;
+                    currentSkinScale = 1;
+                    currentSkinLegacy = false;
+                    rebuildSkinModel3D();
+                    syncSkinPreviewMode();
+                    showToast('Dimensiones invalidas. Usa 64x64, 64x32 o version HD proporcional.', 'error');
+                    return;
+                }
+                currentSkinImg = img;
+                currentSkinScale = info.scale;
+                currentSkinLegacy = info.legacy32;
+                currentSkinSlim = info.legacy32 ? false : detectSlimModel(img, info.scale);
+                rebuildSkinModel3D();
+                syncSkinPreviewMode();
+            };
+            img.onerror = function() {
+                currentSkinImg = null;
+                currentSkinSlim = false;
+                currentSkinScale = 1;
+                currentSkinLegacy = false;
+                rebuildSkinModel3D();
+                syncSkinPreviewMode();
+                showToast('Error al cargar la skin', 'error');
+            };
+            img.src = base64Data;
+        }
+
+        function drawSkin() {
+            if (!skinCtx || !skinCanvas) return;
+
+            const w = skinCanvas.width;
+            const h = skinCanvas.height;
+            const cx = Math.floor(w / 2);
+
+            skinCtx.clearRect(0, 0, w, h);
+
+            // Sombra
+            skinCtx.fillStyle = 'rgba(0,0,0,0.3)';
+            skinCtx.beginPath();
+            skinCtx.ellipse(cx, h - 10, 30, 8, 0, 0, Math.PI * 2);
+            skinCtx.fill();
+
+            // ESCALA para fallback 2D cuando no hay skin cargada
+            const scale = 4;
+            
+            // Tamanos de cada parte (en pixeles del canvas)
+            const headSize = 8 * scale;   // 16px
+            const bodyW = 8 * scale;      // 16px
+            const bodyH = 12 * scale;     // 24px
+            const armW = 4 * scale;       // 8px
+            const armH = 12 * scale;      // 24px
+            const legW = 4 * scale;       // 8px
+            const legH = 12 * scale;      // 24px
+
+            const totalH = headSize + bodyH + legH;
+            const startY = Math.floor((h - totalH) / 2);
+
+            // Animacion de oscilacion suave (pocas veces para evitar VHS)
+            const wobble = Math.sin(skinRotation * 0.02) * 2;
+            const rot = Math.round(wobble);
+
+            if (currentSkinImg) {
+                const img = currentSkinImg;
+                const is64x64 = img.height === 64;
+                
+                // ===== CABEZA =====
+                // Frontal: (8,8) 8x8
+                const headX = cx - headSize/2 + rot;
+                drawPart(img, 8, 8, 8, 8, Math.floor(headX), startY, headSize, headSize);
+                // Overlay: (40,8) 8x8 - solo en 64x64
+                if (is64x64) {
+                    drawPart(img, 40, 8, 8, 8, Math.floor(headX), startY, headSize, headSize, 0.9);
+                }
+
+                // ===== CUERPO =====
+                // Frontal: (20,20) 8x12
+                const bodyX = cx - bodyW/2 + Math.floor(rot * 0.7);
+                const bodyY = startY + headSize;
+                drawPart(img, 20, 20, 8, 12, bodyX, bodyY, bodyW, bodyH);
+                // Overlay: (20,36) 8x12 - solo en 64x64
+                if (is64x64) {
+                    drawPart(img, 20, 36, 8, 12, bodyX, bodyY, bodyW, bodyH, 0.9);
+                }
+
+                // ===== BRAZO DERECHO =====
+                // 64x64: (36,52) 4x12 | 64x32: (44,20) 4x12
+                const rightArmX = is64x64 ? 36 : 44;
+                const rightArmY = is64x64 ? 52 : 20;
+                const rArmDrawX = cx - bodyW/2 - armW + 2 + Math.floor(rot * 0.4);
+                drawPart(img, rightArmX, rightArmY, 4, 12, rArmDrawX, bodyY, armW, armH);
+                // Overlay: (52,52) 4x12 - solo en 64x64
+                if (is64x64) {
+                    drawPart(img, 52, 52, 4, 12, rArmDrawX, bodyY, armW, armH, 0.9);
+                }
+
+                // ===== BRAZO IZQUIERDO =====
+                // 64x64: (44,52) 4x12 con overlay (60,52)
+                // 64x32: Voltear brazo derecho
+                const lArmDrawX = cx + bodyW/2 - 2 + Math.floor(rot * 0.4);
+                if (is64x64) {
+                    drawPart(img, 44, 52, 4, 12, lArmDrawX, bodyY, armW, armH);
+                    drawPart(img, 60, 52, 4, 12, lArmDrawX, bodyY, armW, armH, 0.9);
+                } else {
+                    // 64x32: Voltear horizontalmente el brazo derecho
+                    drawPartFlipped(img, 44, 20, 4, 12, lArmDrawX, bodyY, armW, armH);
+                }
+
+                // ===== PIERNA DERECHA =====
+                // 64x64: (20,52) 4x12 | 64x32: (4,20) 4x12
+                const rightLegX = is64x64 ? 20 : 4;
+                const rightLegY = is64x64 ? 52 : 20;
+                const rLegDrawX = cx - legW - 1 + Math.floor(rot * 0.2);
+                const legY = bodyY + bodyH;
+                drawPart(img, rightLegX, rightLegY, 4, 12, rLegDrawX, legY, legW, legH);
+                // Overlay: (4,36) 4x12 - solo en 64x64
+                if (is64x64) {
+                    drawPart(img, 4, 36, 4, 12, rLegDrawX, legY, legW, legH, 0.9);
+                }
+
+                // ===== PIERNA IZQUIERDA =====
+                // 64x64: (4,52) 4x12 | 64x32: (12,20) 4x12
+                const leftLegX = is64x64 ? 4 : 12;
+                const leftLegY = is64x64 ? 52 : 20;
+                const lLegDrawX = cx + 1 + Math.floor(rot * 0.2);
+                drawPart(img, leftLegX, leftLegY, 4, 12, lLegDrawX, legY, legW, legH);
+                // Overlay: (12,36) 4x12 - solo en 64x64
+                if (is64x64) {
+                    drawPart(img, 12, 36, 4, 12, lLegDrawX, legY, legW, legH, 0.9);
+                }
+
+            } else {
+                drawSteveDefault(cx, startY, headSize, bodyW, bodyH, armW, armH, legW, legH, rot);
+            }
+        }
+
+        function drawSteveDefault(cx, startY, headSize, bodyW, bodyH, armW, armH, legW, legH, rot) {
+            const skinColor = '#c8a07a';
+            const hairColor = '#4a3526';
+            const shirtColor = '#3fbfbf';
+            const pantsColor = '#2b2b7f';
+            const shoeColor = '#4a4a4a';
+            const eyeWhite = '#ffffff';
+            const eyePupil = '#4a4a4a';
+            const mouthColor = '#8b6b4b';
+            
+            // Cabeza
+            skinCtx.fillStyle = hairColor;
+            skinCtx.fillRect(cx - headSize/2 + rot, startY, headSize, headSize);
+            
+            skinCtx.fillStyle = skinColor;
+            skinCtx.fillRect(cx - headSize/2 + 2 + rot, startY + 2, headSize - 4, headSize - 4);
+            
+            const eyeY = startY + 5;
+            const eyeSize = 3;
+            const leftEyeX = cx - 4 + rot;
+            const rightEyeX = cx + 1 + rot;
+            
+            skinCtx.fillStyle = eyeWhite;
+            skinCtx.fillRect(leftEyeX, eyeY, eyeSize, eyeSize);
+            skinCtx.fillStyle = eyePupil;
+            skinCtx.fillRect(leftEyeX + 1, eyeY + 1, 1, 2);
+            
+            skinCtx.fillStyle = eyeWhite;
+            skinCtx.fillRect(rightEyeX, eyeY, eyeSize, eyeSize);
+            skinCtx.fillStyle = eyePupil;
+            skinCtx.fillRect(rightEyeX + 1, eyeY + 1, 1, 2);
+            
+            skinCtx.fillStyle = '#a08060';
+            skinCtx.fillRect(cx - 1 + rot, startY + 9, 2, 1);
+            
+            skinCtx.fillStyle = mouthColor;
+            skinCtx.fillRect(cx - 2 + rot, startY + 12, 4, 1);
+            
+            skinCtx.fillStyle = hairColor;
+            skinCtx.fillRect(leftEyeX - 1, eyeY - 1, eyeSize + 2, 1);
+            skinCtx.fillRect(rightEyeX - 1, eyeY - 1, eyeSize + 2, 1);
+            
+            // Cuerpo
+            skinCtx.fillStyle = shirtColor;
+            skinCtx.fillRect(cx - bodyW/2 + Math.floor(rot * 0.7), startY + headSize, bodyW, bodyH);
+            
+            skinCtx.fillStyle = skinColor;
+            skinCtx.beginPath();
+            skinCtx.moveTo(cx - 3 + Math.floor(rot * 0.7), startY + headSize);
+            skinCtx.lineTo(cx + Math.floor(rot * 0.7), startY + headSize + 4);
+            skinCtx.lineTo(cx + 3 + Math.floor(rot * 0.7), startY + headSize);
+            skinCtx.fill();
+            
+            // Brazos
+            skinCtx.fillStyle = shirtColor;
+            skinCtx.fillRect(cx - bodyW/2 - armW + 2 + Math.floor(rot * 0.4), startY + headSize, armW, Math.floor(armH * 0.4));
+            skinCtx.fillRect(cx + bodyW/2 - 2 + Math.floor(rot * 0.4), startY + headSize, armW, Math.floor(armH * 0.4));
+            
+            skinCtx.fillStyle = skinColor;
+            skinCtx.fillRect(cx - bodyW/2 - armW + 2 + Math.floor(rot * 0.4), startY + headSize + Math.floor(armH * 0.4), armW, Math.floor(armH * 0.6));
+            skinCtx.fillRect(cx + bodyW/2 - 2 + Math.floor(rot * 0.4), startY + headSize + Math.floor(armH * 0.4), armW, Math.floor(armH * 0.6));
+            
+            // Piernas
+            skinCtx.fillStyle = pantsColor;
+            skinCtx.fillRect(cx - legW - 1 + Math.floor(rot * 0.2), startY + headSize + bodyH, legW, Math.floor(legH * 0.7));
+            skinCtx.fillRect(cx + 1 + Math.floor(rot * 0.2), startY + headSize + bodyH, legW, Math.floor(legH * 0.7));
+            
+            skinCtx.fillStyle = shoeColor;
+            skinCtx.fillRect(cx - legW - 1 + Math.floor(rot * 0.2), startY + headSize + bodyH + Math.floor(legH * 0.7), legW, Math.floor(legH * 0.3));
+            skinCtx.fillRect(cx + 1 + Math.floor(rot * 0.2), startY + headSize + bodyH + Math.floor(legH * 0.3), legW, Math.floor(legH * 0.3));
+        }
+
+        function drawPart(img, sx, sy, sw, sh, dx, dy, dw, dh, alpha) {
+            skinCtx.save();
+            if (alpha && alpha < 1) skinCtx.globalAlpha = alpha;
+            skinCtx.imageSmoothingEnabled = false;
+            skinCtx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+            skinCtx.restore();
+        }
+
+        function drawPartFlipped(img, sx, sy, sw, sh, dx, dy, dw, dh) {
+            skinCtx.save();
+            skinCtx.imageSmoothingEnabled = false;
+            skinCtx.translate(dx + dw, dy);
+            skinCtx.scale(-1, 1);
+            skinCtx.drawImage(img, sx, sy, sw, sh, 0, 0, dw, dh);
+            skinCtx.restore();
+        }
+
+        function updateSkinStatus() {
+            const statusContainer = document.getElementById('skin-status');
+            const statusText = document.getElementById('skin-status-text');
+            const removeBtn = document.getElementById('btn-remove-skin');
+
+            if (currentSkinData) {
+                if (statusContainer) statusContainer.classList.add('has-skin');
+                if (statusText) statusText.textContent = 'Skin cargada';
+                if (removeBtn) removeBtn.style.display = 'block';
+            } else {
+                if (statusContainer) statusContainer.classList.remove('has-skin');
+                if (statusText) statusText.textContent = 'Sin skin';
+                if (removeBtn) removeBtn.style.display = 'none';
+            }
+        }
+
+        function previewSkin(input) {
+            if (input.files && input.files[0]) {
+                const file = input.files[0];
+                
+                if (file.type !== 'image/png') {
+                    showToast('La skin debe ser formato PNG', 'error');
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const dataUrl = e.target.result;
+                    
+                    const img = new Image();
+                    img.onload = function() {
+                        const info = getSkinFormatInfo(img.width, img.height);
+                        if (!info) {
+                            showToast('Skin invalida. Usa 64x64, 64x32 o HD proporcional.', 'error');
+                            return;
+                        }
+
+                        currentSkinData = dataUrl;
+                        currentSkinImg = img;
+                        currentSkinScale = info.scale;
+                        currentSkinLegacy = info.legacy32;
+                        currentSkinSlim = info.legacy32 ? false : detectSlimModel(img, info.scale);
+                        rebuildSkinModel3D();
+                        syncSkinPreviewMode();
+                        updateSkinStatus();
+                        if (currentUser && api && api.send) {
+                            sendProfileUpdate(currentUser);
+                        }
+                        showToast('Skin cargada correctamente.', 'success');
+                    };
+                    img.onerror = function() {
+                        showToast('Error al leer la imagen', 'error');
+                    };
+                    img.src = dataUrl;
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function removeSkin() {
+            currentSkinData = null;
+            currentSkinImg = null;
+            currentSkinSlim = false;
+            currentSkinScale = 1;
+            currentSkinLegacy = false;
+            rebuildSkinModel3D();
+            syncSkinPreviewMode();
+            updateSkinStatus();
+            document.getElementById('skin-upload').value = '';
+            if (currentUser && api && api.send) {
+                sendProfileUpdate(currentUser);
+            }
+            showToast('Skin eliminada.', 'success');
+        }
+
+        // ============================================
+        // RESTO DEL CODIGO
+        // ============================================
+
+        window.onload = function() {
+            initSkinCanvas();
+            renderLoaders();
+            selectLoader('Vanilla');
+            if (api && api.send) api.send('get-instances');
+            if (api && api.send) api.send('get-vanilla-versions');
+            if (api && api.send) api.send('get-forge-versions');
+            if (api && api.send) api.send('get-neoforge-versions');
+            if (api && api.send) api.send('get-fabric-versions');
+            if (api && api.send) api.send('get-snapshot-versions');
+            if (api && api.send) api.send('get-profile');
+            if (api && api.send) api.send('get-settings');
+            updateUIState();
+
+            const nameInput = document.getElementById('new-instance-name');
+            if(nameInput) {
+                nameInput.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') requestInstall();
+                });
+            }
+        };
+
+        api && api.on && api.on('instances-list', (event, list) => {
+            instances = list;
+            renderInstanceList();
+            updateUIState();
+        });
+
+        api && api.on && api.on('profile-data', (event, profile) => {
+            applyProfile(profile);
+        });
+
+        api && api.on && api.on('settings-data', (event, data) => {
+            if (!data) return;
+            if (data.ram !== undefined && data.ram !== null) setRamUI(data.ram);
+            setSkinServiceUI(data.skinServiceUrl, data.skinServiceToken);
+        });
+
+        api && api.on && api.on('username-conflict-result', (event, data) => {
+            const requestId = data && data.requestId ? String(data.requestId) : null;
+            if (!requestId || !pendingUsernameChecks.has(requestId)) return;
+            const done = pendingUsernameChecks.get(requestId);
+            pendingUsernameChecks.delete(requestId);
+            done(data || { checked: false, exists: false, serviceUrl: null });
+        });
+
+        api && api.on && api.on('open-instance-folder-error', (event, msg) => {
+            showToast(msg || "No se pudo abrir.", "error");
+        });
+
+        api && api.on && api.on('java-guide', (event, data) => {
+            const summary = document.getElementById('java-guide-summary');
+            let text = 'No se encontro Java compatible.';
+            if (data && data.version && data.required) {
+                text = `Para MC ${data.version} necesitas Java ${data.required}`;
+                if (data.maxAllowed) text += ` (max ${data.maxAllowed})`;
+            }
+            if (summary) summary.innerText = text;
+            openModal('modal-java-guide');
+        });
+
+        api && api.on && api.on('install-complete', () => {
+            if (api && api.send) api.send('get-instances');
+        });
+
+        api && api.on && api.on('install-error', (event, msg) => {
+            closeModal('modal-installing');
+            showToast("Error: " + msg, "error");
+            installingInstanceId = null;
+        });
+
+        api && api.on && api.on('install-progress', (event, data) => {
+            if (!data) return;
+            if (data.id !== currentInstanceId && data.id !== installingInstanceId) return;
+            document.getElementById('install-progress-fill').style.width = `${data.progress || 0}%`;
+            document.getElementById('install-progress-text').innerText = `${data.progress || 0}%`;
+            if (data.stage) document.getElementById('install-stage').innerText = data.stage;
+            openModal('modal-installing');
+        });
+
+        api && api.on && api.on('install-finished', (event, data) => {
+            if (!data) return;
+            if (data.id !== currentInstanceId && data.id !== installingInstanceId) return;
+            closeModal('modal-installing');
+            if (data.installOnly) {
+                showToast(data.source === 'launch' ? "Instalado. Vuelve a jugar." : "Descarga completa.", "success");
+                installingInstanceId = null;
+                return;
+            }
+            showToast("Instalacion completa.", "success");
+            if (!data.firstInstall) openModal('modal-opening');
+        });
+
+        api && api.on && api.on('game-starting', (event, data) => {
+            if (!data || data.id !== currentInstanceId) return;
+            closeModal('modal-installing');
+            if (!data.firstInstall) openModal('modal-opening');
+        });
+
+        api && api.on && api.on('game-started', (event, data) => {
+            if (!data || data.id !== currentInstanceId) return;
+            closeModal('modal-opening');
+            showToast("Minecraft iniciado.", "success");
+        });
+
+        api && api.on && api.on('launch-error', (event, msg) => {
+            closeModal('modal-installing');
+            closeModal('modal-opening');
+            showToast(msg || "Error al iniciar.", "error");
+            installingInstanceId = null;
+        });
+
+        api && api.on && api.on('vanilla-versions', (event, list) => {
+            if (Array.isArray(list) && list.length > 0) {
+                versionData.Vanilla = list;
+                if (selectedLoader === 'Vanilla') renderVersions('Vanilla');
+            }
+        });
+
+        api && api.on && api.on('vanilla-versions-error', () => {
+            showToast("No se pudo obtener versiones.", "error");
+        });
+
+        api && api.on && api.on('forge-versions', (event, list) => {
+            if (Array.isArray(list) && list.length > 0) {
+                versionData.Forge = list;
+                if (selectedLoader === 'Forge') renderVersions('Forge');
+            }
+        });
+
+        api && api.on && api.on('forge-versions-error', () => {
+            showToast("No se pudo obtener Forge.", "error");
+        });
+
+        api && api.on && api.on('neoforge-versions', (event, list) => {
+            if (Array.isArray(list) && list.length > 0) {
+                versionData.NeoForge = list;
+                if (selectedLoader === 'NeoForge') renderVersions('NeoForge');
+            }
+        });
+
+        api && api.on && api.on('neoforge-versions-error', () => {
+            showToast("No se pudo obtener NeoForge.", "error");
+        });
+
+        api && api.on && api.on('fabric-versions', (event, list) => {
+            if (Array.isArray(list) && list.length > 0) {
+                versionData.Fabric = list;
+                if (selectedLoader === 'Fabric') renderVersions('Fabric');
+            }
+        });
+
+        api && api.on && api.on('fabric-versions-error', () => {
+            showToast("No se pudo obtener Fabric.", "error");
+        });
+
+        api && api.on && api.on('snapshot-versions', (event, list) => {
+            if (Array.isArray(list) && list.length > 0) {
+                versionData.Snapshots = list;
+                if (selectedLoader === 'Snapshots') renderVersions('Snapshots');
+            }
+        });
+
+        api && api.on && api.on('snapshot-versions-error', () => {
+            showToast("No se pudo obtener Snapshots.", "error");
+        });
+
+        api && api.on && api.on('game-log', (event, message) => {
+            const logContainer = document.getElementById('launch-log');
+            if(logContainer) {
+                const div = document.createElement('div');
+                div.className = 'log-entry';
+                div.innerText = message;
+                logContainer.appendChild(div);
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+        });
+
+        function previewImage(input) {
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    currentAvatarData = e.target.result;
+                    applyAvatar(currentAvatarData);
+                };
+                reader.readAsDataURL(input.files[0]);
+            }
+        }
+
+        async function handleLogin(type) {
+            if (loginBusy) return;
+            loginBusy = true;
+            const usernameInput = document.getElementById('offline-username');
+            try {
+                if(type === 'offline') {
+                    const value = usernameInput.value.trim();
+                    if (!value) { showToast("Ingresa nombre", "error"); return; }
+
+                    const conflict = await checkUsernameConflict(value);
+                    if (skinServiceUrl && (!conflict || !conflict.checked)) {
+                        showToast("No se pudo verificar el usuario en el servicio de skins. Intenta de nuevo.", "error");
+                        return;
+                    }
+                    if (conflict && conflict.checked && conflict.exists) {
+                        showToast(`Ese usuario ya esta registrado en skins compartidas. Usa otro nombre.`, "error");
+                        return;
+                    }
+                    currentUser = value;
+                }
+                document.getElementById('display-username').innerText = currentUser;
+                document.getElementById('account-type').innerText = "Cuenta Offline";
+                document.getElementById('profile-username-input').value = currentUser;
+                document.getElementById('login-panel').style.display = 'none';
+                document.getElementById('logged-panel').style.display = 'block';
+                applyAvatar(currentAvatarData);
+                sendProfileUpdate(currentUser);
+                updateUIState();
+            } finally {
+                loginBusy = false;
+            }
+        }
+
+        function logout() {
+            if(!currentUser) return;
+            logFocus('logout-open-modal');
+            openModal('modal-confirm-logout');
+        }
+
+        function confirmLogout(ok) {
+            closeAllModals();
+            if (!ok) { logFocus('logout-cancel'); return; }
+            performLogout();
+        }
+
+        function performLogout() {
+            logFocus('logout-confirmed');
+            currentUser = null;
+            currentInstanceId = null;
+            currentSkinData = null;
+            currentSkinImg = null;
+            currentSkinSlim = false;
+            currentSkinScale = 1;
+            currentSkinLegacy = false;
+            document.getElementById('display-username').innerText = "Invitado";
+            document.getElementById('account-type').innerText = "No Conectado";
+            document.getElementById('login-panel').style.display = 'block';
+            document.getElementById('logged-panel').style.display = 'none';
+            document.getElementById('form-premium').style.display = 'none';
+            document.getElementById('form-cracked').style.display = 'block';
+            const userInput = document.getElementById('offline-username');
+            userInput.value = '';
+            currentAvatarData = null;
+            applyAvatar(null);
+            updateSkinStatus();
+            rebuildSkinModel3D();
+            syncSkinPreviewMode();
+            document.getElementById('profile-username-input').value = '';
+            document.getElementById('avatar-upload').value = '';
+            document.getElementById('skin-upload').value = '';
+            if (api && api.send) api.send('clear-profile');
+            updateUIState();
+            closeAllModals();
+            showToast("Sesion cerrada", "neutral");
+            if (api && api.send) api.send('focus-window');
+            setTimeout(() => {
+                requestAnimationFrame(() => {
+                    userInput.focus();
+                    userInput.click();
+                    userInput.select();
+                });
+            }, 50);
+        }
+
+        async function saveProfile() {
+            const newName = document.getElementById('profile-username-input').value.trim();
+            if(newName) {
+                const oldName = String(currentUser || '').trim();
+                if (!oldName || oldName.toLowerCase() !== newName.toLowerCase()) {
+                    const conflict = await checkUsernameConflict(newName);
+                    if (skinServiceUrl && (!conflict || !conflict.checked)) {
+                        showToast("No se pudo verificar el usuario en el servicio de skins.", "error");
+                        return;
+                    }
+                    if (conflict && conflict.checked && conflict.exists) {
+                        showToast("Ese usuario ya esta registrado en skins compartidas.", "error");
+                        return;
+                    }
+                }
+                currentUser = newName;
+                document.getElementById('display-username').innerText = newName;
+                document.getElementById('offline-username').value = newName;
+                applyAvatar(currentAvatarData);
+                sendProfileUpdate(newName);
+                showToast("Perfil actualizado", "success");
+                closeAllModals();
+            }
+        }
+
+        function setRamUI(val) {
+            const num = Number(val);
+            if (!Number.isFinite(num)) return;
+            const clamped = Math.max(2, Math.min(16, Math.round(num)));
+            ramSetting = clamped;
+            document.getElementById('ram-value').innerText = clamped;
+            document.getElementById('ram-range').value = clamped;
+        }
+
+        function updateRam(v) {
+            ramSetting = v;
+            document.getElementById('ram-value').innerText = v;
+            if (api && api.send) api.send('set-ram', v);
+        }
+
+        function resolveSkinModelForProfile() {
+            if (!currentSkinData) return null;
+            if (skinModelMode === 'slim') return 'slim';
+            if (skinModelMode === 'classic') return 'classic';
+            return currentSkinSlim ? 'slim' : 'classic';
+        }
+
+        function sendProfileUpdate(nameOverride) {
+            if (!api || !api.send) return;
+            const profileName = String(nameOverride || currentUser || '').trim();
+            if (!profileName) return;
+            api.send('save-profile', {
+                name: profileName,
+                avatarData: currentAvatarData,
+                skinData: currentSkinData,
+                skinModel: resolveSkinModelForProfile()
+            });
+        }
+
+        function checkUsernameConflict(username) {
+            return new Promise((resolve) => {
+                if (!api || !api.send) {
+                    resolve({ checked: false, exists: false, serviceUrl: null });
+                    return;
+                }
+                const requestId = `user_check_${Date.now()}_${++usernameCheckSeq}`;
+                pendingUsernameChecks.set(requestId, resolve);
+                api.send('check-username-conflict', {
+                    requestId,
+                    username: String(username || '').trim()
+                });
+                setTimeout(() => {
+                    if (pendingUsernameChecks.has(requestId)) {
+                        const done = pendingUsernameChecks.get(requestId);
+                        pendingUsernameChecks.delete(requestId);
+                        done({ checked: false, exists: false, timeout: true, serviceUrl: null });
+                    }
+                }, 2200);
+            });
+        }
+
+        function setSkinServiceUI(url, token) {
+            skinServiceUrl = typeof url === 'string' ? url : '';
+            skinServiceToken = typeof token === 'string' ? token : '';
+            const urlInput = document.getElementById('skin-service-url');
+            const tokenInput = document.getElementById('skin-service-token');
+            if (urlInput) urlInput.value = skinServiceUrl;
+            if (tokenInput) tokenInput.value = skinServiceToken;
+        }
+
+        function saveSkinServiceSettings() {
+            const urlInput = document.getElementById('skin-service-url');
+            const tokenInput = document.getElementById('skin-service-token');
+            const rawUrl = urlInput ? urlInput.value.trim() : '';
+            const rawToken = tokenInput ? tokenInput.value.trim() : '';
+
+            if (rawUrl) {
+                try {
+                    const parsed = new URL(rawUrl);
+                    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+                        showToast('La URL debe usar http o https.', 'error');
+                        return;
+                    }
+                } catch {
+                    showToast('URL de servicio invalida.', 'error');
+                    return;
+                }
+            }
+
+            skinServiceUrl = rawUrl;
+            skinServiceToken = rawToken;
+
+            if (api && api.send) {
+                api.send('set-skin-service-settings', {
+                    url: skinServiceUrl,
+                    token: skinServiceToken
+                });
+            }
+
+            if (!skinServiceUrl) {
+                showToast('Modo local activado (sin servidor compartido).', 'success');
+            } else {
+                showToast('Servicio de skins guardado.', 'success');
+            }
+        }
+
+        function updateUIState() {
+            const isLocked = !currentUser;
+            ['btn-play', 'btn-add-instance', 'btn-select-instance'].forEach(id => {
+                const el = document.getElementById(id);
+                if(el) {
+                    if(isLocked) el.classList.add('ui-locked');
+                    else el.classList.remove('ui-locked');
+                }
+            });
+            const nameDisplay = document.getElementById('current-inst-name');
+            if(!currentUser && nameDisplay) {
+                nameDisplay.innerText = "Inicia sesion";
+            } else if (currentUser && nameDisplay) {
+                if(currentInstanceId && instances.length > 0) {
+                    const inst = instances.find(i => i.id === currentInstanceId);
+                    if(inst) nameDisplay.innerText = inst.name;
+                    else nameDisplay.innerText = "Ninguna seleccionada";
+                } else {
+                    nameDisplay.innerText = "Ninguna seleccionada";
+                }
+            }
+        }
+
+        function requestInstall() {
+            const nameInput = document.getElementById('new-instance-name');
+            const name = nameInput.value.trim();
+            if(!name) { showToast("Ponle nombre", "error"); nameInput.focus(); return; }
+            if(!selectedVersion) { showToast("Selecciona version", "error"); return; }
+            pendingCreateData = { id: Date.now(), name, version: selectedVersion, loader: selectedLoader, username: currentUser };
+            closeAllModals();
+            openModal('modal-confirm-download');
+        }
+
+        function requestLaunch() {
+            if(!currentInstanceId) return showToast("Selecciona instancia", "error");
+            const inst = instances.find(i => i.id === currentInstanceId);
+            if(!inst) return;
+            closeAllModals();
+            if (api && api.send) api.send('launch-game', currentInstanceId);
+        }
+
+        function switchView(viewName, e) {
+            document.querySelectorAll('.nav-btn').forEach(btn => btn.classList.remove('active'));
+            if (e && e.currentTarget) e.currentTarget.classList.add('active');
+            else {
+                const btn = document.querySelector(`.nav-btn[data-view="${viewName}"]`);
+                if (btn) btn.classList.add('active');
+            }
+            document.querySelectorAll('.view-section').forEach(section => section.classList.remove('active'));
+            const target = document.getElementById(`view-${viewName}`);
+            if (target) target.classList.add('active');
+        }
+
+        function renderLoaders() {
+            const list = document.getElementById('loader-list');
+            if(!list) return;
+            list.innerHTML = '';
+            Object.keys(versionData).forEach(loader => {
+                const item = document.createElement('div');
+                item.className = 'loader-item';
+                item.innerText = loader;
+                item.onclick = (e) => selectLoader(loader, e);
+                list.appendChild(item);
+            });
+        }
+
+        function selectLoader(loaderName, e) {
+            selectedLoader = loaderName;
+            document.querySelectorAll('.loader-item').forEach(el => {
+                if (el.textContent === loaderName) el.classList.add('active');
+                else el.classList.remove('active');
+            });
+            if (e && e.currentTarget) e.currentTarget.classList.add('active');
+            renderVersions(loaderName);
+        }
+
+        function renderVersions(loaderName) {
+            const list = document.getElementById('version-list');
+            if(!list) return;
+            list.innerHTML = '';
+            versionData[loaderName].forEach(ver => {
+                const chip = document.createElement('div');
+                chip.className = 'version-chip';
+                chip.innerText = ver;
+                chip.onclick = (e) => { selectVersion(e, ver); };
+                list.appendChild(chip);
+            });
+        }
+
+        function selectVersion(e, ver) {
+            document.querySelectorAll('.version-chip').forEach(c => c.classList.remove('selected'));
+            if(e && e.currentTarget) e.currentTarget.classList.add('selected');
+            selectedVersion = ver;
+        }
+
+        function renderInstanceList() {
+            const container = document.getElementById('instance-list-container');
+            if(!container) return;
+            container.innerHTML = '';
+            instances.forEach(inst => {
+                const item = document.createElement('div');
+                item.className = 'instance-list-item';
+                item.innerHTML = `
+                    <div class="inst-info">
+                        <span class="inst-name">${inst.name}</span>
+                        <span class="inst-ver">${inst.loader !== 'Vanilla' ? inst.loader.toLowerCase() + ' ' : ''}${inst.version}</span>
+                    </div>
+                    <div class="inst-actions">
+                        <div class="inst-actions-row">
+                            <button class="btn-small btn-select" onclick="selectInstance(${inst.id})">Seleccionar</button>
+                            <button class="btn-small btn-delete" onclick="deleteInstance(${inst.id})">Borrar</button>
+                        </div>
+                        <button class="btn-small btn-folder" onclick="openInstanceFolder(${inst.id})">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h6z"/></svg>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(item);
+            });
+        }
+
+        function selectInstance(id) {
+            currentInstanceId = id;
+            updateUIState();
+            closeAllModals();
+        }
+
+        function deleteInstance(id) {
+            pendingDeleteId = id;
+            pendingReturnModal = 'modal-select-instance';
+            closeAllModals();
+            openModal('modal-confirm-delete');
+        }
+
+        function openInstanceFolder(id) {
+            if (api && api.send) api.send('open-instance-folder', id);
+        }
+
+        function openExternal(url) {
+            if (api && api.send) api.send('open-external', url);
+        }
+
+        function confirmDelete(ok) {
+            closeAllModals();
+            if (!ok || !pendingDeleteId) {
+                if (pendingReturnModal) openModal(pendingReturnModal);
+                pendingDeleteId = null;
+                pendingReturnModal = null;
+                return;
+            }
+            if (api && api.send) api.send('delete-instance', pendingDeleteId);
+            pendingDeleteId = null;
+            if (pendingReturnModal) openModal(pendingReturnModal);
+            pendingReturnModal = null;
+        }
+
+        function confirmDownload(shouldDownload) {
+            closeAllModals();
+            if (shouldDownload === null) { openModal('modal-create-instance'); return; }
+            if (!pendingCreateData) return;
+            const payload = pendingCreateData;
+            pendingCreateData = null;
+
+            if (shouldDownload) {
+                installingInstanceId = payload.id;
+                document.getElementById('install-progress-fill').style.width = '0%';
+                document.getElementById('install-progress-text').innerText = '0%';
+                document.getElementById('install-stage').innerText = 'Preparando...';
+                openModal('modal-installing');
+                if (api && api.send) api.send('install-instance', { ...payload, downloadNow: true });
+                return;
+            }
+            if (api && api.send) api.send('install-instance', { ...payload, downloadNow: false });
+            showToast("Instancia creada.", "success");
+        }
+
+        function openModal(id) {
+            const modal = document.getElementById(id);
+            if(modal) modal.style.display = 'flex';
+
+            if(id === 'modal-select-instance' && api && api.send) api.send('get-instances');
+
+            if(id === 'modal-create-instance') {
+                const nameInput = document.getElementById('new-instance-name');
+                if(nameInput) {
+                    if (api && api.send) api.send('focus-window');
+                    nameInput.value = pendingCreateData && pendingCreateData.name ? pendingCreateData.name : '';
+                    setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
+                }
+            }
+
+            if(id === 'modal-profile') {
+                setTimeout(() => {
+                    initSkinCanvas();
+                    loadSkinImage(currentSkinData);
+                }, 100);
+            }
+        }
+
+        function closeModal(id) {
+            const modal = document.getElementById(id);
+            if (modal) modal.style.display = 'none';
+        }
+
+        function closeAllModals() {
+            document.querySelectorAll('.modal-overlay').forEach(m => m.style.display = 'none');
+        }
+
+        function setLoginMode(mode, e) {
+            if(mode === 'premium') {
+                document.getElementById('form-premium').style.display = 'block';
+                document.getElementById('form-cracked').style.display = 'none';
+            } else {
+                document.getElementById('form-premium').style.display = 'none';
+                document.getElementById('form-cracked').style.display = 'block';
+            }
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            if(e && e.currentTarget) e.currentTarget.classList.add('active');
+        }
+
+        function showToast(msg, type) {
+            const c = document.getElementById('toast-container');
+            if(!c) return;
+            const t = document.createElement('div');
+            t.className = 'toast';
+            let col = 'var(--primary)';
+            if(type==='error') col='var(--error)';
+            if(type==='success') col='var(--success)';
+            t.style.borderLeftColor = col;
+            t.innerHTML = `<span style="color:${col}">•</span> ${msg}`;
+            c.appendChild(t);
+            setTimeout(() => { t.style.opacity = 0; setTimeout(()=>t.remove(), 300); }, 3000);
+        }
+    </script>
+</body>
+</html>

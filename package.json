@@ -1,0 +1,17 @@
+{
+  "name": "xeno-launcher",
+  "version": "1.0.0",
+  "description": "Xeno Launcher",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "skin-hub": "node skin-hub-server.js"
+  },
+  "author": "Devitt",
+  "license": "ISC",
+  "dependencies": {
+    "electron": "^22.0.0",
+    "minecraft-launcher-core": "^3.14.0",
+    "electron-store": "^8.1.0"
+  }
+}

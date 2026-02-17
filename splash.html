@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Xeno Launcher</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --text: #e6f2ff;
+      --muted: #8b9bb4;
+      --accent: #00f0ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(500px 320px at 50% 35%, rgba(0, 240, 255, 0.08), transparent 60%),
+        radial-gradient(700px 420px at 50% 80%, rgba(112, 0, 255, 0.08), transparent 65%);
+      pointer-events: none;
+    }
+    .splash {
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      padding: 24px;
+    }
+    .logo-wrap {
+      position: relative;
+      width: 230px;
+      height: 230px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .logo-wrap::before,
+    .logo-wrap::after {
+      content: "";
+      position: absolute;
+      inset: -16px;
+      border-radius: 50%;
+      border: 1px solid rgba(0, 240, 255, 0.35);
+      box-shadow: 0 0 22px rgba(0, 240, 255, 0.15);
+      animation: spin 8s linear infinite;
+      z-index: 1;
+    }
+    .logo-wrap::after {
+      inset: -30px;
+      border: 1px dashed rgba(112, 0, 255, 0.4);
+      box-shadow: 0 0 26px rgba(112, 0, 255, 0.15);
+      animation: spinReverse 12s linear infinite;
+      z-index: 1;
+    }
+    .progress-ring {
+      position: absolute;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: repeating-conic-gradient(
+        from 0deg,
+        rgba(0, 240, 255, 0.9) 0deg 10deg,
+        rgba(0, 240, 255, 0.15) 10deg 18deg
+      );
+      mask-image: radial-gradient(farthest-side, transparent calc(100% - 8px), #000 calc(100% - 6px));
+      -webkit-mask-image: radial-gradient(farthest-side, transparent calc(100% - 8px), #000 calc(100% - 6px));
+      animation: spin 2.6s linear infinite;
+      filter: drop-shadow(0 0 12px rgba(0, 240, 255, 0.25));
+      opacity: 0.9;
+      z-index: 2;
+    }
+    .logo {
+      position: relative;
+      z-index: 3;
+      width: 220px;
+      max-width: 70vw;
+      height: auto;
+      opacity: 0.92;
+      filter: drop-shadow(0 0 18px rgba(0, 240, 255, 0.35)) saturate(0.95);
+      mask-image: radial-gradient(circle, #000 55%, transparent 78%);
+      -webkit-mask-image: radial-gradient(circle, #000 55%, transparent 78%);
+      animation: float 3.8s ease-in-out infinite;
+    }
+    .title {
+      font-size: 18px;
+      letter-spacing: 0.6px;
+      color: var(--text);
+      margin-top: 0;
+    }
+    .meta {
+      font-size: 11px;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      color: rgba(230, 242, 255, 0.65);
+    }
+    .status {
+      font-size: 13px;
+      letter-spacing: 0.3px;
+      color: var(--muted);
+      margin-top: 0;
+    }
+    .text-block {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 16px;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    @keyframes spinReverse {
+      from { transform: rotate(360deg); }
+      to { transform: rotate(0deg); }
+    }
+    @keyframes float {
+      0%, 100% { transform: translateY(0); }
+      50% { transform: translateY(-4px); }
+    }
+  </style>
+</head>
+<body>
+  <div class="splash">
+    <div class="logo-wrap">
+      <div class="progress-ring" aria-hidden="true"></div>
+      <img class="logo" src="Logos xeno/inicio_xeno.png" alt="Xeno Launcher" />
+    </div>
+    <div class="text-block">
+      <div class="title">Bienvenido a Xeno Launcher</div>
+      <div class="meta">v1.0.0 BETA</div>
+      <div id="splash-status" class="status">Buscando actualizaciones del launcher...</div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      const statusEl = document.getElementById('splash-status');
+      const setStatus = (value) => {
+        const text = typeof value === 'string'
+          ? value
+          : value && typeof value.text === 'string'
+            ? value.text
+            : '';
+        if (!text || !statusEl) return;
+        statusEl.textContent = text;
+      };
+
+      if (window.xenoSplash && typeof window.xenoSplash.onStatus === 'function') {
+        window.xenoSplash.onStatus(setStatus);
+      }
+    })();
+  </script>
+</body>
+</html>
