@@ -1,4 +1,4 @@
-# Xeno Launcher Updates (Real Workflow)
+﻿# Xeno Launcher Updates (Real Workflow)
 
 ## ES (Espanol)
 
@@ -13,6 +13,7 @@ Este launcher ya soporta actualizacion real en arranque para versiones empaqueta
 2. Compara version actual vs ultima version publicada.
 3. Si hay una version nueva:
    - descarga instalador `.exe` o `.msi`
+   - valida el instalador descargado
    - ejecuta instalador
    - cierra launcher para actualizar
 
@@ -41,6 +42,13 @@ $env:XENO_UPDATE_MODE="auto"
 npm start
 ```
 
+Para permitir actualizar desde pre-releases:
+
+```powershell
+$env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
+npm start
+```
+
 ### Requisito para que funcione a tus usuarios
 
 Debes publicar releases con version mayor a la instalada (ej: `1.0.1`, `1.0.2`) y adjuntar instalador Windows.
@@ -49,10 +57,18 @@ Debes publicar releases con version mayor a la instalada (ej: `1.0.1`, `1.0.2`) 
 
 1. Sube el repo a GitHub.
 2. Define `repository` en `package.json` con tu repo.
-3. Compila instalador (`XenoLauncher-Setup-<version>.exe`).
-4. Crea release en GitHub con tag `v<version>` (ej: `v1.0.1`).
-5. Adjunta el `.exe` (o `.msi`) a la release.
-6. Al abrir launcher, tus usuarios reciben la actualizacion.
+3. Sube cambios de version en `package.json` (ej: `1.0.1`).
+4. Compila instalador:
+
+```bash
+npm install
+npm run build:win
+```
+
+5. Crea release en GitHub con tag `v<version>` (ej: `v1.0.1`).
+6. Adjunta `dist/XenoLauncher-Setup-<version>.exe` a la release.
+7. Marca la release como publicada (no `draft`).
+8. Al abrir launcher, tus usuarios reciben la actualizacion.
 
 ---
 
@@ -69,6 +85,7 @@ This launcher already supports real startup updates for packaged builds (`app.is
 2. It compares current version vs latest published version.
 3. If a newer version exists:
    - downloads `.exe` or `.msi`
+   - validates the downloaded installer
    - launches installer
    - closes launcher to update
 
@@ -97,6 +114,13 @@ $env:XENO_UPDATE_MODE="auto"
 npm start
 ```
 
+Allow updates from pre-releases:
+
+```powershell
+$env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
+npm start
+```
+
 ### Requirement for users to receive updates
 
 You must publish releases with a higher version than installed (e.g. `1.0.1`, `1.0.2`) and attach a Windows installer.
@@ -105,7 +129,15 @@ You must publish releases with a higher version than installed (e.g. `1.0.1`, `1
 
 1. Push repo to GitHub.
 2. Set `repository` in `package.json`.
-3. Build installer (`XenoLauncher-Setup-<version>.exe`).
-4. Create release tag `v<version>` (e.g. `v1.0.1`).
-5. Attach `.exe` (or `.msi`) to release assets.
-6. On next launcher start, users get the update.
+3. Bump version in `package.json` (e.g. `1.0.1`).
+4. Build installer:
+
+```bash
+npm install
+npm run build:win
+```
+
+5. Create release tag `v<version>` (e.g. `v1.0.1`).
+6. Attach `dist/XenoLauncher-Setup-<version>.exe` to release assets.
+7. Publish the release (not `draft`).
+8. On next launcher start, users get the update.

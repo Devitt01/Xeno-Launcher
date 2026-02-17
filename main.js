@@ -74,6 +74,7 @@ const UPDATE_DOWNLOAD_TIMEOUT_MS = 180000;
 const UPDATE_MANIFEST_URL = String(process.env.XENO_UPDATE_MANIFEST_URL || '').trim();
 const UPDATE_REPO_OVERRIDE = String(process.env.XENO_UPDATE_REPO || '').trim();
 const UPDATE_MODE = String(process.env.XENO_UPDATE_MODE || 'auto').trim().toLowerCase();
+const UPDATE_INCLUDE_PRERELEASE = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_INCLUDE_PRERELEASE || '').trim());
 
 const sharedSkinServiceHealthCache = {
   url: '',
@@ -495,15 +496,31 @@ async function fetchLatestReleaseInfo() {
 
   const repo = resolveUpdateRepo();
   if (!repo) return null;
+  let data = null;
+  if (UPDATE_INCLUDE_PRERELEASE) {
+    const releases = await requestJsonWithMethod(
+      'GET',
+      `https://api.github.com/repos/${repo}/releases?per_page=20`,
+      null,
+      { Accept: 'application/vnd.github+json' },
+      2,
+      UPDATE_CHECK_TIMEOUT_MS
+    );
+    if (Array.isArray(releases)) {
+      data = releases.find((item) => item && item.draft !== true) || null;
+    }
+  } else {
+    data = await requestJsonWithMethod(
+      'GET',
+      `https://api.github.com/repos/${repo}/releases/latest`,
+      null,
+      { Accept: 'application/vnd.github+json' },
+      2,
+      UPDATE_CHECK_TIMEOUT_MS
+    );
+  }
 
-  const data = await requestJsonWithMethod(
-    'GET',
-    `https://api.github.com/repos/${repo}/releases/latest`,
-    null,
-    { Accept: 'application/vnd.github+json' },
-    2,
-    UPDATE_CHECK_TIMEOUT_MS
-  );
+  if (!data || typeof data !== 'object') return null;
 
   const version = normalizeVersion(data.tag_name || data.name || '');
   const assets = normalizeReleaseAssets(data.assets || []);
@@ -599,6 +616,18 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   } catch (err) {
     appendFocusLog(`UPDATE Download failed: ${String(err)}`);
     send('Fallo la descarga de actualizacion del launcher. Continuando...');
+    return { updateAvailable: true, failed: true, error: String(err) };
+  }
+
+  try {
+    const stat = fs.statSync(installerPath);
+    const ext = path.extname(installerPath).toLowerCase();
+    if ((ext !== '.exe' && ext !== '.msi') || stat.size < 1024 * 1024) {
+      throw new Error('Instalador descargado invalido.');
+    }
+  } catch (err) {
+    appendFocusLog(`UPDATE Downloaded installer validation failed: ${String(err)}`);
+    send('La actualizacion descargada no es valida. Continuando...');
     return { updateAvailable: true, failed: true, error: String(err) };
   }
 

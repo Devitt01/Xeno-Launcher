@@ -5,13 +5,55 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "skin-hub": "node skin-hub-server.js"
+    "skin-hub": "node skin-hub-server.js",
+    "build:win": "electron-builder --win nsis --publish never",
+    "build:portable": "electron-builder --win portable --publish never"
   },
   "author": "Devitt",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Afoa0120/Xeno-Launcher.git"
+  },
   "dependencies": {
     "electron": "^22.0.0",
     "minecraft-launcher-core": "^3.14.0",
     "electron-store": "^8.1.0"
+  },
+  "devDependencies": {
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.xeno.launcher",
+    "productName": "Xeno Launcher",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!node_modules/.cache/**",
+      "!skin-hub-data/**",
+      "!cloudflared.exe",
+      "!*.log"
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "XenoLauncher-Setup-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "deleteAppDataOnUninstall": false
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Afoa0120",
+        "repo": "Xeno-Launcher",
+        "releaseType": "release"
+      }
+    ]
   }
 }
