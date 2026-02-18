@@ -9,7 +9,8 @@
     "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build:win": "electron-builder --win nsis --publish never",
     "build:win:clean": "npm run clean:dist && electron-builder --win nsis --publish never",
-    "build:portable": "npm run clean:dist && electron-builder --win portable --publish never"
+    "build:portable": "npm run clean:dist && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe",
+    "build:release:win": "npm run clean:dist && electron-builder --win nsis --publish never && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe"
   },
   "author": "Devitt",
   "license": "ISC",

@@ -1,104 +1,107 @@
-﻿# Xeno Launcher Updates (Real Workflow)
+﻿# Xeno Launcher Updates (Setup + Portable)
 
 ## ES (Espanol)
 
-Este launcher ya soporta actualizacion real en arranque para versiones empaquetadas (`app.isPackaged`).
+El launcher ya soporta actualizacion real al iniciar para builds empaquetadas (`app.isPackaged`) en **dos modos**:
+- `setup` (instalado con NSIS)
+- `portable` (ejecutable portable)
 
-### Como decide si hay update
+### Como decide el update
 
-1. Busca fuente de update en este orden:
+1. Resuelve fuente de update (orden):
    - `XENO_UPDATE_MANIFEST_URL`
    - `XENO_UPDATE_REPO`
    - `repository` en `package.json`
-2. Compara version actual vs ultima version publicada.
-3. Si hay una version nueva:
-   - descarga instalador `.exe` o `.msi`
-   - valida el instalador descargado
-   - ejecuta instalador
-   - cierra launcher para actualizar
+2. Compara `app.getVersion()` vs ultima release.
+3. Si hay version nueva:
+   - En modo `setup`: busca asset instalador (`Setup/Installer .exe/.msi`).
+   - En modo `portable`: busca asset portable (`Portable .exe`).
+4. Descarga, valida, instala/aplica y reinicia launcher.
 
 ### Importante
 
 - Esto **no** actualiza Windows.
-- Solo actualiza **Xeno Launcher**.
+- Esto solo actualiza **Xeno Launcher**.
 - No publica nada automaticamente. Publicar release sigue siendo manual.
+- En `portable`, si no hay permisos de escritura en la carpeta del `.exe`, se fuerza update manual.
 
-### Modo manual / auto
+### Modo auto/manual
 
 - Auto (default): revisa updates al iniciar.
 - Manual: no revisa updates.
 
-Para forzar manual:
+Forzar manual:
 
 ```powershell
 $env:XENO_UPDATE_MODE="manual"
 npm start
 ```
 
-Para forzar auto:
+Forzar auto:
 
 ```powershell
 $env:XENO_UPDATE_MODE="auto"
 npm start
 ```
 
-Para permitir actualizar desde pre-releases:
+Permitir pre-releases:
 
 ```powershell
 $env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
 npm start
 ```
 
-### Requisito para distribucion a usuarios
+### Como publicar para que actualice Setup y Portable
 
-Para que los clientes reciban actualizaciones, se debe publicar una release con version mayor a la instalada (ej: `1.0.1`, `1.0.2`) y adjuntar un instalador de Windows.
-
-### Flujo recomendado (GitHub Releases)
-
-1. Subir el repositorio a GitHub.
-2. Definir `repository` en `package.json` con la URL del repositorio.
-3. Actualizar version en `package.json` (ej: `1.0.1`).
-4. Compila instalador:
+1. Subir cambios a GitHub.
+2. Subir version en `package.json` (ejemplo `1.0.1`).
+3. Compilar ambos artefactos:
 
 ```bash
 npm install
-npm run build:win
+npm run build:release:win
 ```
 
-5. Crear release en GitHub con tag `v<version>` (ej: `v1.0.1`).
-6. Adjuntar `dist/XenoLauncher-Setup-<version>.exe` a la release.
-7. Publicar la release (no `draft`).
-8. En el siguiente inicio del launcher, los clientes reciben la actualizacion.
+4. Crear release con tag `v<version>` (ejemplo `v1.0.1`).
+5. Adjuntar ambos archivos de `dist/`:
+   - `XenoLauncher-Setup-<version>.exe`
+   - `XenoLauncher-Portable-<version>.exe`
+6. Publicar release (no `draft`).
+7. En el proximo inicio:
+   - Usuarios setup -> update setup.
+   - Usuarios portable -> update portable.
 
 ---
 
 ## EN (English)
 
-This launcher already supports real startup updates for packaged builds (`app.isPackaged`).
+The launcher now supports real startup updates for packaged builds (`app.isPackaged`) in **two modes**:
+- `setup` (NSIS installed app)
+- `portable` (portable executable)
 
-### How it decides updates
+### How update detection works
 
-1. It resolves an update source in this order:
+1. It resolves update source (order):
    - `XENO_UPDATE_MANIFEST_URL`
    - `XENO_UPDATE_REPO`
-   - `repository` from `package.json`
-2. It compares current version vs latest published version.
+   - `repository` in `package.json`
+2. It compares `app.getVersion()` with the latest release.
 3. If a newer version exists:
-   - downloads `.exe` or `.msi`
-   - validates the downloaded installer
-   - launches installer
-   - closes launcher to update
+   - In `setup` mode: it looks for setup installer asset (`Setup/Installer .exe/.msi`).
+   - In `portable` mode: it looks for portable asset (`Portable .exe`).
+4. It downloads, validates, applies/installs, and restarts.
 
 ### Important
 
 - This does **not** update Windows.
 - It only updates **Xeno Launcher**.
-- Nothing is published automatically. Releasing is still manual.
+- Nothing is published automatically. Release publishing is still manual.
+- In `portable` mode, if write permission is missing on the current `.exe` folder, update falls back to manual.
 
-### Manual / auto mode
+### Auto/manual mode
 
-- Auto (default): checks updates at startup.
-- Manual: no update checks.
+- Auto (default): checks updates on startup.
+- Manual: skips update checks.
 
 Force manual:
 
@@ -114,30 +117,29 @@ $env:XENO_UPDATE_MODE="auto"
 npm start
 ```
 
-Allow updates from pre-releases:
+Allow pre-releases:
 
 ```powershell
 $env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
 npm start
 ```
 
-### Requirement for users to receive updates
+### Release flow so Setup and Portable both update
 
-You must publish releases with a higher version than installed (e.g. `1.0.1`, `1.0.2`) and attach a Windows installer.
-
-### Recommended flow (GitHub Releases)
-
-1. Push repo to GitHub.
-2. Set `repository` in `package.json`.
-3. Bump version in `package.json` (e.g. `1.0.1`).
-4. Build installer:
+1. Push changes to GitHub.
+2. Bump `package.json` version (example `1.0.1`).
+3. Build both artifacts:
 
 ```bash
 npm install
-npm run build:win
+npm run build:release:win
 ```
 
-5. Create release tag `v<version>` (e.g. `v1.0.1`).
-6. Attach `dist/XenoLauncher-Setup-<version>.exe` to release assets.
-7. Publish the release (not `draft`).
-8. On next launcher start, users get the update.
+4. Create release tag `v<version>` (example `v1.0.1`).
+5. Upload both files from `dist/`:
+   - `XenoLauncher-Setup-<version>.exe`
+   - `XenoLauncher-Portable-<version>.exe`
+6. Publish release (not `draft`).
+7. On next launcher start:
+   - Setup users get setup update.
+   - Portable users get portable update.

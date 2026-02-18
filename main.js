@@ -447,7 +447,7 @@ function normalizeReleaseAssets(assets) {
     .filter(Boolean);
 }
 
-function selectWindowsInstallerAsset(assets) {
+function selectWindowsSetupAsset(assets) {
   const list = normalizeReleaseAssets(assets).filter((item) => /\.(exe|msi)$/i.test(item.name));
   if (list.length === 0) return null;
 
@@ -463,6 +463,71 @@ function selectWindowsInstallerAsset(assets) {
 
   list.sort((a, b) => score(b.name) - score(a.name));
   return list[0];
+}
+
+function selectWindowsPortableAsset(assets) {
+  const allExe = normalizeReleaseAssets(assets).filter((item) => /\.exe$/i.test(item.name));
+  if (allExe.length === 0) return null;
+
+  const setupLike = allExe.filter((item) => /setup|installer/i.test(item.name));
+  let list = allExe.filter((item) => /portable/i.test(item.name));
+
+  if (list.length === 0) {
+    const nonSetup = allExe.filter((item) => !/setup|installer/i.test(item.name));
+    if (nonSetup.length === 1) return nonSetup[0];
+    if (nonSetup.length > 1) list = nonSetup;
+  }
+
+  if (list.length === 0 && setupLike.length > 0 && allExe.length > setupLike.length) {
+    list = allExe.filter((item) => !setupLike.includes(item));
+  }
+
+  if (list.length === 0) return null;
+
+  const score = (name) => {
+    let value = 0;
+    if (/portable/i.test(name)) value += 8;
+    if (/xeno/i.test(name)) value += 2;
+    if (/setup|installer/i.test(name)) value -= 5;
+    if (/\.exe$/i.test(name)) value += 1;
+    return value;
+  };
+
+  list.sort((a, b) => {
+    const byScore = score(b.name) - score(a.name);
+    if (byScore !== 0) return byScore;
+    return (b.size || 0) - (a.size || 0);
+  });
+  return list[0];
+}
+
+function isPortableRuntime() {
+  if (process.platform !== 'win32') return false;
+  const envHint = String(
+    process.env.PORTABLE_EXECUTABLE_FILE
+    || process.env.PORTABLE_EXECUTABLE_DIR
+    || ''
+  ).trim();
+  if (envHint) return true;
+  try {
+    const exeName = path.basename(app.getPath('exe') || '').toLowerCase();
+    return exeName.includes('portable');
+  } catch {
+    return false;
+  }
+}
+
+function getWindowsUpdateMode() {
+  return isPortableRuntime() ? 'portable' : 'setup';
+}
+
+function hasDirectoryWriteAccess(dirPath) {
+  try {
+    fs.accessSync(dirPath, fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function spawnDetached(command, args = []) {
@@ -491,6 +556,49 @@ function launchInstaller(installerPath) {
     spawnDetached(installerPath, ['/silent']) ||
     spawnDetached(installerPath, [])
   );
+}
+
+function psQuote(value) {
+  return `'${String(value || '').replace(/'/g, "''")}'`;
+}
+
+function launchPortableSelfUpdater(downloadedExePath) {
+  try {
+    const src = path.resolve(String(downloadedExePath || '').trim());
+    const dst = path.resolve(app.getPath('exe'));
+    if (!src || !dst || src.toLowerCase() === dst.toLowerCase()) return false;
+
+    const script = [
+      `$src=${psQuote(src)}`,
+      `$dst=${psQuote(dst)}`,
+      '$ok=$false',
+      'for($i=0;$i -lt 120;$i++){',
+      '  try {',
+      '    Copy-Item -LiteralPath $src -Destination $dst -Force',
+      '    $ok=$true',
+      '    break',
+      '  } catch {',
+      '    Start-Sleep -Milliseconds 500',
+      '  }',
+      '}',
+      'if($ok){',
+      '  Start-Sleep -Milliseconds 250',
+      '  Start-Process -FilePath $dst | Out-Null',
+      '}'
+    ].join(';');
+
+    return spawnDetached('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-WindowStyle',
+      'Hidden',
+      '-Command',
+      script
+    ]);
+  } catch {
+    return false;
+  }
 }
 
 async function fetchLatestReleaseInfo() {
@@ -625,11 +733,20 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
   }
 
-  const installerAsset = selectWindowsInstallerAsset(latest.assets);
-  if (!installerAsset) {
-    appendFocusLog('UPDATE No Windows installer asset found');
+  const winUpdateMode = getWindowsUpdateMode();
+  appendFocusLog(`UPDATE Windows mode=${winUpdateMode}`);
+
+  const selectedAsset = winUpdateMode === 'portable'
+    ? selectWindowsPortableAsset(latest.assets)
+    : selectWindowsSetupAsset(latest.assets);
+
+  if (!selectedAsset) {
+    appendFocusLog(`UPDATE No Windows asset found for mode=${winUpdateMode}`);
+    const manualText = winUpdateMode === 'portable'
+      ? 'No hay binario portable en la release. Actualiza manualmente.'
+      : 'Actualizacion del launcher disponible. Instala manualmente.';
     send({
-      text: 'Actualizacion del launcher disponible. Instala manualmente.',
+      text: manualText,
       phase: 'manual',
       showProgress: false,
       progress: null,
@@ -638,9 +755,46 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
   }
 
+  const selectedExt = path.extname(String(selectedAsset.name || '')).toLowerCase();
+  const validAssetForMode = winUpdateMode === 'portable'
+    ? selectedExt === '.exe'
+    : (selectedExt === '.exe' || selectedExt === '.msi');
+  if (!validAssetForMode) {
+    appendFocusLog(`UPDATE Invalid asset for mode=${winUpdateMode}: ${selectedAsset.name}`);
+    send({
+      text: 'La release no tiene un archivo de actualizacion compatible.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
+  }
+
+  if (winUpdateMode === 'portable') {
+    let currentExeDir = '';
+    try {
+      currentExeDir = path.dirname(app.getPath('exe'));
+    } catch {
+      currentExeDir = '';
+    }
+    if (!currentExeDir || !hasDirectoryWriteAccess(currentExeDir)) {
+      appendFocusLog(`UPDATE Portable mode without write access to exe dir: ${currentExeDir || '<unknown>'}`);
+      send({
+        text: 'No hay permisos para actualizar el portable en esta carpeta. Actualiza manualmente.',
+        phase: 'manual',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
+    }
+  }
+
   const updatesDir = path.join(app.getPath('userData'), 'updates');
   ensureDir(updatesDir);
-  const installerPath = path.join(updatesDir, sanitizeFileName(installerAsset.name));
+  const installerPath = path.join(updatesDir, sanitizeFileName(selectedAsset.name));
+  appendFocusLog(`UPDATE Asset selected (${winUpdateMode}): ${selectedAsset.name}`);
   try {
     if (fs.existsSync(installerPath)) fs.unlinkSync(installerPath);
   } catch {
@@ -656,7 +810,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     showProgress: true
   });
 
-  const downloadPromise = downloadFile(installerAsset.url, installerPath, (ratio) => {
+  const downloadPromise = downloadFile(selectedAsset.url, installerPath, (ratio) => {
     const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
     if (pct === lastPercent) return;
     if (pct < 100 && pct - lastPercent < 2) return;
@@ -692,7 +846,10 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   try {
     const stat = fs.statSync(installerPath);
     const ext = path.extname(installerPath).toLowerCase();
-    if ((ext !== '.exe' && ext !== '.msi') || stat.size < 1024 * 1024) {
+    const isValidExt = winUpdateMode === 'portable'
+      ? ext === '.exe'
+      : (ext === '.exe' || ext === '.msi');
+    if (!isValidExt || stat.size < 1024 * 1024) {
       throw new Error('Instalador descargado invalido.');
     }
   } catch (err) {
@@ -708,13 +865,17 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   }
 
   send({
-    text: 'Instalando actualizacion del launcher...',
+    text: winUpdateMode === 'portable'
+      ? 'Aplicando actualizacion portable...'
+      : 'Instalando actualizacion del launcher...',
     phase: 'installing',
     progress: 100,
     indeterminate: true,
     showProgress: true
   });
-  const launched = launchInstaller(installerPath);
+  const launched = winUpdateMode === 'portable'
+    ? launchPortableSelfUpdater(installerPath)
+    : launchInstaller(installerPath);
   if (!launched) {
     appendFocusLog(`UPDATE Could not launch installer ${installerPath}`);
     send({
@@ -729,13 +890,15 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
   appendFocusLog(`UPDATE Installer launched: ${installerPath}`);
   send({
-    text: 'Actualizacion del launcher lista. Reiniciando...',
+    text: winUpdateMode === 'portable'
+      ? 'Actualizacion portable lista. Reiniciando...'
+      : 'Actualizacion del launcher lista. Reiniciando...',
     phase: 'installing',
     progress: 100,
     indeterminate: true,
     showProgress: true
   });
-  return { installing: true, version: latest.version };
+  return { installing: true, version: latest.version, mode: winUpdateMode };
 }
 
 function extractForgeMcVersions(promos) {
