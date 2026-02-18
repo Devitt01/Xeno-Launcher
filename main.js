@@ -66,6 +66,10 @@ const FORGE_MAVEN_BASE = `${FORGE_MAVEN_ROOT}net/minecraftforge/forge/`;
 const NEOFORGE_MAVEN_ROOT = 'https://maven.neoforged.net/releases/';
 const NEOFORGE_MAVEN_BASE = `${NEOFORGE_MAVEN_ROOT}net/neoforged/neoforge/`;
 const NEOFORGE_FORGE_BASE = `${NEOFORGE_MAVEN_ROOT}net/neoforged/forge/`;
+const OPTIFINE_VERSION_LIST_URL = 'https://bmclapi2.bangbang93.com/optifine/versionList';
+const OPTIFINE_DOWNLOAD_BASE_URL = 'https://bmclapi2.bangbang93.com/optifine';
+const MODRINTH_API_BASE_URL = 'https://api.modrinth.com/v2';
+const MODRINTH_SODIUM_PROJECT_ID = 'AANobbMI';
 const HTTP_USER_AGENT = 'XenoLauncher/1.0';
 const AUTHLIB_INJECTOR_META_URLS = [
   'https://authlib-injector.yushi.moe/artifact/latest.json',
@@ -87,6 +91,12 @@ const UPDATE_MANIFEST_URL = String(process.env.XENO_UPDATE_MANIFEST_URL || '').t
 const UPDATE_REPO_OVERRIDE = String(process.env.XENO_UPDATE_REPO || '').trim();
 const UPDATE_MODE = String(process.env.XENO_UPDATE_MODE || 'auto').trim().toLowerCase();
 const UPDATE_INCLUDE_PRERELEASE = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_INCLUDE_PRERELEASE || '').trim());
+const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
+
+const addonCache = {
+  optifine: { checkedAt: 0, list: [] },
+  sodium: new Map()
+};
 
 const sharedSkinServiceHealthCache = {
   url: '',
@@ -892,6 +902,232 @@ function isAtLeast(version, target) {
     if (ai < bi) return false;
   }
   return true;
+}
+
+function normalizeAddonSelection(addons) {
+  const src = addons && typeof addons === 'object' ? addons : {};
+  return {
+    optifine: !!src.optifine,
+    sodium: !!src.sodium
+  };
+}
+
+function sanitizeAddonFileName(name, fallbackName) {
+  return sanitizeFileName(String(name || '').trim() || fallbackName);
+}
+
+function decodeUrlFileName(url, fallbackName) {
+  try {
+    const pathname = new URL(url).pathname || '';
+    const raw = pathname.split('/').filter(Boolean).pop() || '';
+    return sanitizeAddonFileName(decodeURIComponent(raw), fallbackName);
+  } catch {
+    return sanitizeAddonFileName('', fallbackName);
+  }
+}
+
+function scoreOptiFineCandidate(entry) {
+  const patch = String(entry && entry.patch ? entry.patch : '').trim();
+  const filename = String(entry && entry.filename ? entry.filename : '').trim().toLowerCase();
+  const preMatch = /^pre(\d+)$/i.exec(patch);
+  const stableWeight = preMatch ? 0 : 1;
+  const letterMatch = /^([A-Za-z])/.exec(patch);
+  const letterWeight = letterMatch ? letterMatch[1].toUpperCase().charCodeAt(0) : 0;
+  const numMatch = /(\d+)$/.exec(patch);
+  const numWeight = numMatch ? parseInt(numMatch[1], 10) : 0;
+  const previewPenalty = filename.startsWith('preview_') ? -1 : 0;
+  const preWeight = preMatch ? parseInt(preMatch[1], 10) : 0;
+  return {
+    stableWeight,
+    letterWeight,
+    numWeight,
+    previewPenalty,
+    preWeight,
+    patchLex: patch.toLowerCase()
+  };
+}
+
+function compareOptiFineCandidates(a, b) {
+  const sa = scoreOptiFineCandidate(a);
+  const sb = scoreOptiFineCandidate(b);
+  if (sa.stableWeight !== sb.stableWeight) return sb.stableWeight - sa.stableWeight;
+  if (sa.previewPenalty !== sb.previewPenalty) return sb.previewPenalty - sa.previewPenalty;
+  if (sa.letterWeight !== sb.letterWeight) return sb.letterWeight - sa.letterWeight;
+  if (sa.numWeight !== sb.numWeight) return sb.numWeight - sa.numWeight;
+  if (sa.preWeight !== sb.preWeight) return sb.preWeight - sa.preWeight;
+  return sb.patchLex.localeCompare(sa.patchLex);
+}
+
+async function fetchOptiFineVersionList() {
+  const now = Date.now();
+  if (
+    addonCache.optifine.list.length > 0
+    && now - addonCache.optifine.checkedAt < ADDON_CACHE_TTL_MS
+  ) {
+    return addonCache.optifine.list;
+  }
+  const data = await fetchJson(OPTIFINE_VERSION_LIST_URL);
+  const list = Array.isArray(data) ? data : [];
+  addonCache.optifine = { checkedAt: now, list };
+  return list;
+}
+
+async function resolveOptiFineArtifact(mcVersion) {
+  const list = await fetchOptiFineVersionList();
+  const candidates = list
+    .filter((entry) => entry && String(entry.mcversion || '').trim() === String(mcVersion || '').trim())
+    .filter((entry) => entry.type && entry.patch);
+  if (candidates.length === 0) return null;
+
+  candidates.sort(compareOptiFineCandidates);
+  const chosen = candidates[0];
+  const safeVersion = encodeURIComponent(String(chosen.mcversion).trim());
+  const safeType = encodeURIComponent(String(chosen.type).trim());
+  const safePatch = encodeURIComponent(String(chosen.patch).trim());
+  const url = `${OPTIFINE_DOWNLOAD_BASE_URL}/${safeVersion}/${safeType}/${safePatch}`;
+  const fallbackName = `OptiFine_${chosen.mcversion}_${chosen.type}_${chosen.patch}.jar`;
+  const fileName = sanitizeAddonFileName(chosen.filename, fallbackName);
+  return {
+    url,
+    fileName,
+    title: `OptiFine ${chosen.type} ${chosen.patch}`
+  };
+}
+
+async function resolveSodiumArtifact(mcVersion) {
+  const key = String(mcVersion || '').trim();
+  if (!key) return null;
+
+  const cached = addonCache.sodium.get(key);
+  if (cached && Date.now() - cached.checkedAt < ADDON_CACHE_TTL_MS) {
+    return cached.artifact;
+  }
+
+  const params = new URLSearchParams({
+    loaders: JSON.stringify(['fabric']),
+    game_versions: JSON.stringify([key])
+  });
+  const url = `${MODRINTH_API_BASE_URL}/project/${MODRINTH_SODIUM_PROJECT_ID}/version?${params.toString()}`;
+  const data = await fetchJson(url);
+  const versions = Array.isArray(data) ? data : [];
+  if (versions.length === 0) {
+    addonCache.sodium.set(key, { checkedAt: Date.now(), artifact: null });
+    return null;
+  }
+
+  const selectedVersion = versions.find((v) => v && v.version_type === 'release') || versions[0];
+  const file = (selectedVersion.files || []).find((f) => f && f.primary) || (selectedVersion.files || [])[0];
+  if (!file || !file.url) {
+    addonCache.sodium.set(key, { checkedAt: Date.now(), artifact: null });
+    return null;
+  }
+
+  const fileName = sanitizeAddonFileName(
+    file.filename,
+    decodeUrlFileName(file.url, `sodium-fabric-${key}.jar`)
+  );
+  const artifact = {
+    url: String(file.url).trim(),
+    fileName,
+    title: `Sodium ${selectedVersion.version_number || key}`
+  };
+  addonCache.sodium.set(key, { checkedAt: Date.now(), artifact });
+  return artifact;
+}
+
+function isAddonCompatibleWithLoader(addonKey, loader) {
+  if (addonKey === 'optifine') return loader === 'Forge';
+  if (addonKey === 'sodium') return loader === 'Fabric';
+  return false;
+}
+
+async function installOptionalAddons(event, inst, root, progressStart = 0, progressWeight = 0) {
+  const selection = normalizeAddonSelection(inst.addons);
+  inst.addons = selection;
+
+  const requested = [];
+  if (selection.optifine) requested.push({ key: 'optifine', label: 'OptiFine' });
+  if (selection.sodium) requested.push({ key: 'sodium', label: 'Sodium' });
+  if (requested.length === 0 || progressWeight <= 0) return [];
+
+  const loader = String(inst.loader || 'Vanilla');
+  const compatible = [];
+  const warnings = [];
+  for (const addon of requested) {
+    if (isAddonCompatibleWithLoader(addon.key, loader)) {
+      compatible.push(addon);
+    } else {
+      warnings.push(`${addon.label} requiere ${addon.key === 'optifine' ? 'Forge' : 'Fabric'}.`);
+    }
+  }
+  if (compatible.length === 0) return warnings;
+
+  const modsDir = path.join(root, 'mods');
+  ensureDir(modsDir);
+  const taskWeight = progressWeight / compatible.length;
+  let doneWeight = 0;
+
+  for (const addon of compatible) {
+    const taskStart = progressStart + doneWeight;
+    const taskEnd = progressStart + doneWeight + taskWeight;
+    const stagePrefix = `Instalando ${addon.label}...`;
+    let taskSucceeded = false;
+    event.sender.send('install-progress', {
+      id: inst.id,
+      progress: Math.floor(taskStart),
+      stage: stagePrefix
+    });
+
+    try {
+      let artifact = null;
+      if (addon.key === 'optifine') artifact = await resolveOptiFineArtifact(inst.version);
+      if (addon.key === 'sodium') artifact = await resolveSodiumArtifact(inst.version);
+      if (!artifact || !artifact.url) {
+        warnings.push(`${addon.label} no disponible para ${inst.version}.`);
+        doneWeight += taskWeight;
+        event.sender.send('install-progress', {
+          id: inst.id,
+          progress: Math.floor(taskEnd),
+          stage: `${addon.label} no disponible, continuando...`
+        });
+        continue;
+      }
+
+      const target = path.join(modsDir, sanitizeAddonFileName(artifact.fileName, `${addon.key}-${inst.version}.jar`));
+      if (!fs.existsSync(target)) {
+        await downloadFile(artifact.url, target, (ratio) => {
+          const clamped = Math.max(0, Math.min(1, ratio || 0));
+          const mapped = taskStart + (taskWeight * clamped);
+          event.sender.send('install-progress', {
+            id: inst.id,
+            progress: Math.floor(mapped),
+            stage: stagePrefix
+          });
+        });
+      }
+
+      inst.addonsInstalled = inst.addonsInstalled && typeof inst.addonsInstalled === 'object'
+        ? inst.addonsInstalled
+        : {};
+      inst.addonsInstalled[addon.key] = {
+        file: path.basename(target),
+        title: artifact.title || addon.label,
+        at: Date.now()
+      };
+      taskSucceeded = true;
+    } catch (err) {
+      warnings.push(`${addon.label} no se pudo instalar: ${String(err)}`);
+    } finally {
+      doneWeight += taskWeight;
+      event.sender.send('install-progress', {
+        id: inst.id,
+        progress: Math.floor(taskEnd),
+        stage: taskSucceeded ? `${addon.label} listo.` : `${addon.label} omitido.`
+      });
+    }
+  }
+
+  return warnings;
 }
 
 function requiredJavaMajor(version) {
@@ -1713,6 +1949,8 @@ async function runInstallOnly(event, inst, list, options = {}) {
     throw new Error('Este loader no está soportado por ahora.');
   }
 
+  inst.addons = normalizeAddonSelection(inst.addons);
+
   const javaSelection = await selectJavaForVersion(inst.version);
   if (!javaSelection.path) {
     event.sender.send('java-guide', {
@@ -1732,6 +1970,8 @@ async function runInstallOnly(event, inst, list, options = {}) {
 
   let loaderJar = null;
   let loaderWeight = 0;
+  let preInstallWeight = 0;
+  let addonWarnings = [];
   try {
     if (loader === 'Forge') {
       const resolved = await resolveForgeInstaller(inst.version, inst.loaderVersion);
@@ -1768,6 +2008,13 @@ async function runInstallOnly(event, inst, list, options = {}) {
     throw err;
   }
 
+  const addonSelectionCount = Number(inst.addons.optifine) + Number(inst.addons.sodium);
+  const addonWeight = addonSelectionCount > 0 ? Math.min(20, addonSelectionCount * 10) : 0;
+  if (addonWeight > 0) {
+    addonWarnings = await installOptionalAddons(event, inst, root, loaderWeight, addonWeight);
+  }
+  preInstallWeight = Math.min(95, loaderWeight + addonWeight);
+
   const launcher = new Client();
   const stageState = {};
   let lastDebug = '';
@@ -1776,8 +2023,8 @@ async function runInstallOnly(event, inst, list, options = {}) {
     if (!e || !e.type || !e.total) return;
     stageState[e.type] = e.total > 0 ? (e.task / e.total) : 0;
     const overall = computeOverallProgress(stageState);
-    const mapped = loaderWeight > 0
-      ? Math.min(100, loaderWeight + Math.floor((100 - loaderWeight) * (overall / 100)))
+    const mapped = preInstallWeight > 0
+      ? Math.min(100, preInstallWeight + Math.floor((100 - preInstallWeight) * (overall / 100)))
       : overall;
     event.sender.send('install-progress', {
       id: inst.id,
@@ -1821,7 +2068,7 @@ async function runInstallOnly(event, inst, list, options = {}) {
   }
   applyLoaderOverrides(opts, loader);
 
-  const startPct = loaderWeight > 0 ? loaderWeight : 0;
+  const startPct = preInstallWeight > 0 ? preInstallWeight : 0;
   event.sender.send('install-progress', { id: inst.id, progress: startPct, stage: 'Preparando descarga...' });
 
   const child = await launcher.launch(opts);
@@ -1836,7 +2083,13 @@ async function runInstallOnly(event, inst, list, options = {}) {
   if (idx >= 0) list[idx] = inst;
   setInstances(list);
   event.sender.send('instances-list', list);
-  event.sender.send('install-finished', { id: inst.id, firstInstall: true, installOnly: true, source: options.source || 'create' });
+  event.sender.send('install-finished', {
+    id: inst.id,
+    firstInstall: true,
+    installOnly: true,
+    source: options.source || 'create',
+    addonWarnings
+  });
 }
 
 function normalizeSplashPayload(payload) {
@@ -2352,7 +2605,8 @@ ipcMain.on('install-instance', async (event, data) => {
     name: String(data.name).trim(),
     version: String(data.version).trim(),
     loader: String(data.loader || 'Vanilla'),
-    username: String(data.username || 'Offline')
+    username: String(data.username || 'Offline'),
+    addons: normalizeAddonSelection(data.addons)
   };
 
   const list = getInstances();
@@ -2361,7 +2615,10 @@ ipcMain.on('install-instance', async (event, data) => {
   const merged = {
     ...clean,
     installed: prev ? !!prev.installed : false,
-    installedAt: prev ? prev.installedAt || null : null
+    installedAt: prev ? prev.installedAt || null : null,
+    addonsInstalled: prev && prev.addonsInstalled && typeof prev.addonsInstalled === 'object'
+      ? prev.addonsInstalled
+      : {}
   };
   if (idx === -1) list.push(merged);
   else list[idx] = merged;

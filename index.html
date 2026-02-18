@@ -409,6 +409,13 @@
         .version-chip:hover { border-color: var(--primary); color: white; transform: translateY(-2px); }
         .version-chip.selected { background: var(--secondary); border-color: var(--secondary); color: white; box-shadow: 0 0 10px rgba(43, 109, 255, 0.45); }
 
+        .addon-options { margin-top: 14px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; display: none; }
+        .addon-options h4 { font-size: 12px; color: var(--text-main); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.7px; }
+        .addon-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-main); margin-bottom: 8px; }
+        .addon-row:last-child { margin-bottom: 0; }
+        .addon-row input { width: 14px; height: 14px; accent-color: var(--primary); cursor: pointer; }
+        .addon-hint { font-size: 11px; color: var(--text-dim); margin-top: 6px; line-height: 1.35; }
+
         .progress-bar { width: 100%; height: 10px; background: rgba(255,255,255,0.08); border-radius: 999px; overflow: hidden; margin-top: 15px; }
         .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--secondary)); transition: width 0.2s ease; }
         .progress-text { font-size: 12px; color: var(--text-dim); margin-top: 8px; text-align: right; }
@@ -647,6 +654,18 @@
                     <div class="loader-sidebar" id="loader-list"></div>
                     <div class="version-content" id="version-list"></div>
                 </div>
+                <div id="addon-options" class="addon-options">
+                    <h4>Extras opcionales</h4>
+                    <label id="addon-optifine-row" class="addon-row" style="display: none;">
+                        <input type="checkbox" id="addon-optifine">
+                        <span>Instalar OptiFine (requiere Forge)</span>
+                    </label>
+                    <label id="addon-sodium-row" class="addon-row" style="display: none;">
+                        <input type="checkbox" id="addon-sodium">
+                        <span>Instalar Sodium (requiere Fabric)</span>
+                    </label>
+                    <p id="addon-options-hint" class="addon-hint"></p>
+                </div>
                 <button class="action-btn" style="margin-top: 20px;" onclick="requestInstall()">Crear Instancia</button>
             </div>
         </div>
@@ -679,6 +698,7 @@
         let ramSetting = 4;
         let selectedVersion = null;
         let selectedLoader = "Vanilla";
+        let selectedAddons = { optifine: false, sodium: false };
         let currentInstanceId = null;
         let instances = [];
         let pendingDeleteId = null;
@@ -1448,6 +1468,16 @@
                     if (e.key === 'Enter') requestInstall();
                 });
             }
+
+            const optifineInput = document.getElementById('addon-optifine');
+            if (optifineInput) {
+                optifineInput.addEventListener('change', (e) => setAddonState('optifine', e.target.checked));
+            }
+            const sodiumInput = document.getElementById('addon-sodium');
+            if (sodiumInput) {
+                sodiumInput.addEventListener('change', (e) => setAddonState('sodium', e.target.checked));
+            }
+            refreshAddonOptions();
         };
 
         api && api.on && api.on('instances-list', (event, list) => {
@@ -1512,6 +1542,9 @@
             if (!data) return;
             if (data.id !== currentInstanceId && data.id !== installingInstanceId) return;
             closeModal('modal-installing');
+            if (Array.isArray(data.addonWarnings) && data.addonWarnings.length > 0) {
+                data.addonWarnings.slice(0, 2).forEach((msg) => showToast(msg, "error"));
+            }
             if (data.installOnly) {
                 showToast(data.source === 'launch' ? "Instalado. Vuelve a jugar." : "Descarga completa.", "success");
                 installingInstanceId = null;
@@ -1850,12 +1883,78 @@
             }
         }
 
+        function setAddonState(addonKey, enabled) {
+            if (addonKey !== 'optifine' && addonKey !== 'sodium') return;
+            selectedAddons[addonKey] = !!enabled;
+        }
+
+        function resetAddonState() {
+            selectedAddons = { optifine: false, sodium: false };
+            const optifineInput = document.getElementById('addon-optifine');
+            const sodiumInput = document.getElementById('addon-sodium');
+            if (optifineInput) optifineInput.checked = false;
+            if (sodiumInput) sodiumInput.checked = false;
+        }
+
+        function refreshAddonOptions() {
+            const wrap = document.getElementById('addon-options');
+            const optifineRow = document.getElementById('addon-optifine-row');
+            const sodiumRow = document.getElementById('addon-sodium-row');
+            const optifineInput = document.getElementById('addon-optifine');
+            const sodiumInput = document.getElementById('addon-sodium');
+            const hint = document.getElementById('addon-options-hint');
+            if (!wrap || !optifineRow || !sodiumRow || !optifineInput || !sodiumInput || !hint) return;
+
+            const hasVersion = !!selectedVersion;
+            const canOptifine = hasVersion && selectedLoader === 'Forge';
+            const canSodium = hasVersion && selectedLoader === 'Fabric';
+
+            optifineRow.style.display = canOptifine ? 'flex' : 'none';
+            sodiumRow.style.display = canSodium ? 'flex' : 'none';
+
+            if (!canOptifine) {
+                optifineInput.checked = false;
+                selectedAddons.optifine = false;
+            }
+            if (!canSodium) {
+                sodiumInput.checked = false;
+                selectedAddons.sodium = false;
+            }
+
+            const anyVisible = canOptifine || canSodium;
+            wrap.style.display = anyVisible ? 'block' : 'none';
+
+            if (!anyVisible) {
+                hint.innerText = hasVersion
+                    ? 'No hay extras disponibles para este loader.'
+                    : 'Selecciona version para ver extras compatibles.';
+                return;
+            }
+            if (canOptifine && canSodium) {
+                hint.innerText = 'Marca los extras que quieras instalar junto con Minecraft.';
+            } else if (canOptifine) {
+                hint.innerText = 'OptiFine se descarga al instalar la instancia.';
+            } else {
+                hint.innerText = 'Sodium se descarga al instalar la instancia.';
+            }
+        }
+
         function requestInstall() {
             const nameInput = document.getElementById('new-instance-name');
             const name = nameInput.value.trim();
             if(!name) { showToast("Ponle nombre", "error"); nameInput.focus(); return; }
             if(!selectedVersion) { showToast("Selecciona version", "error"); return; }
-            pendingCreateData = { id: Date.now(), name, version: selectedVersion, loader: selectedLoader, username: currentUser };
+            pendingCreateData = {
+                id: Date.now(),
+                name,
+                version: selectedVersion,
+                loader: selectedLoader,
+                username: currentUser,
+                addons: {
+                    optifine: !!selectedAddons.optifine,
+                    sodium: !!selectedAddons.sodium
+                }
+            };
             closeAllModals();
             openModal('modal-confirm-download');
         }
@@ -1895,12 +1994,14 @@
 
         function selectLoader(loaderName, e) {
             selectedLoader = loaderName;
+            selectedVersion = null;
             document.querySelectorAll('.loader-item').forEach(el => {
                 if (el.textContent === loaderName) el.classList.add('active');
                 else el.classList.remove('active');
             });
             if (e && e.currentTarget) e.currentTarget.classList.add('active');
             renderVersions(loaderName);
+            refreshAddonOptions();
         }
 
         function renderVersions(loaderName) {
@@ -1914,12 +2015,14 @@
                 chip.onclick = (e) => { selectVersion(e, ver); };
                 list.appendChild(chip);
             });
+            refreshAddonOptions();
         }
 
         function selectVersion(e, ver) {
             document.querySelectorAll('.version-chip').forEach(c => c.classList.remove('selected'));
             if(e && e.currentTarget) e.currentTarget.classList.add('selected');
             selectedVersion = ver;
+            refreshAddonOptions();
         }
 
         function renderInstanceList() {
@@ -2011,9 +2114,20 @@
 
             if(id === 'modal-create-instance') {
                 const nameInput = document.getElementById('new-instance-name');
+                const optifineInput = document.getElementById('addon-optifine');
+                const sodiumInput = document.getElementById('addon-sodium');
                 if(nameInput) {
                     if (api && api.send) api.send('focus-window');
                     nameInput.value = pendingCreateData && pendingCreateData.name ? pendingCreateData.name : '';
+                    if (pendingCreateData && pendingCreateData.addons) {
+                        selectedAddons.optifine = !!pendingCreateData.addons.optifine;
+                        selectedAddons.sodium = !!pendingCreateData.addons.sodium;
+                    } else {
+                        resetAddonState();
+                    }
+                    if (optifineInput) optifineInput.checked = !!selectedAddons.optifine;
+                    if (sodiumInput) sodiumInput.checked = !!selectedAddons.sodium;
+                    refreshAddonOptions();
                     setTimeout(() => { nameInput.focus(); nameInput.select(); }, 50);
                 }
             }
