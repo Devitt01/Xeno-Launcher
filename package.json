@@ -7,16 +7,17 @@
     "start": "electron .",
     "skin-hub": "node skin-hub-server.js",
     "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "build:asar-asset": "node scripts/export-update-asar.js",
     "build:win": "electron-builder --win nsis --publish never",
     "build:win:clean": "npm run clean:dist && electron-builder --win nsis --publish never",
     "build:portable": "npm run clean:dist && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe",
-    "build:release:win": "npm run clean:dist && electron-builder --win nsis --publish never && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe"
+    "build:release:win": "npm run clean:dist && electron-builder --win nsis --publish never && npm run build:asar-asset && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe"
   },
   "author": "Devitt",
   "license": "ISC",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Afoa0120/Xeno-Launcher.git"
+    "url": "https://github.com/Devitt01/Xeno-Launcher.git"
   },
   "dependencies": {
     "minecraft-launcher-core": "^3.14.0",
@@ -58,7 +59,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "Afoa0120",
+        "owner": "Devitt01",
         "repo": "Xeno-Launcher",
         "releaseType": "release"
       }

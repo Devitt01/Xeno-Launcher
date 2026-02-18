@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 try {
   const gracefulFs = require('graceful-fs');
   gracefulFs.gracefulify(fs);
@@ -37,6 +38,8 @@ const store = new Store({
     instances: [],
     ram: 4,
     profile: null,
+    elyClientToken: '',
+    lastAppliedUpdateMarker: '',
     forgeMcVersions: [],
     neoforgeMcVersions: [],
     fabricMcVersions: [],
@@ -81,6 +84,8 @@ const AUTHLIB_INJECTOR_FALLBACK_URLS = [
 const AUTHLIB_INJECTOR_MAVEN_METADATA = 'https://repo1.maven.org/maven2/org/glavo/hmcl/authlib-injector/maven-metadata.xml';
 const AUTHLIB_INJECTOR_MAVEN_BASE = 'https://repo1.maven.org/maven2/org/glavo/hmcl/authlib-injector';
 const AUTHLIB_INJECTOR_FILE = 'authlib-injector.jar';
+const ELY_AUTH_SERVER_URL = 'https://authserver.ely.by';
+const ELY_AUTHLIB_INJECTOR_TARGET = 'ely.by';
 const MCLC_ASSET_CONCURRENCY = 12;
 const DEFAULT_SHARED_SKIN_SERVICE_URL = process.env.XENO_DEFAULT_SKIN_SERVICE_URL || '';
 const STARTUP_MIN_SPLASH_MS = 3000;
@@ -91,6 +96,11 @@ const UPDATE_MANIFEST_URL = String(process.env.XENO_UPDATE_MANIFEST_URL || '').t
 const UPDATE_REPO_OVERRIDE = String(process.env.XENO_UPDATE_REPO || '').trim();
 const UPDATE_MODE = String(process.env.XENO_UPDATE_MODE || 'auto').trim().toLowerCase();
 const UPDATE_INCLUDE_PRERELEASE = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_INCLUDE_PRERELEASE || '').trim());
+const UPDATE_REQUIRE_APPROVAL = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_REQUIRE_APPROVAL || 'true').trim());
+const UPDATE_ALLOW_UNAPPROVED = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_UNAPPROVED || '').trim());
+const UPDATE_APPROVAL_TOKEN = String(process.env.XENO_UPDATE_APPROVAL_TOKEN || 'XENO_PUBLIC_UPDATE').trim();
+const UPDATE_ALLOW_BINARY_FALLBACK = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_BINARY_FALLBACK || '').trim());
+const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const addonCache = {
@@ -447,6 +457,54 @@ function normalizeReleaseAssets(assets) {
     .filter(Boolean);
 }
 
+function buildReleaseAssetsMarker(assets) {
+  const normalized = normalizeReleaseAssets(assets);
+  if (normalized.length === 0) return 'no-assets';
+  const raw = normalized
+    .map((item) => `${item.name}|${item.size}|${item.url}`)
+    .sort()
+    .join('\n');
+  return crypto.createHash('sha1').update(raw).digest('hex');
+}
+
+function isReleaseApproved(payload) {
+  if (!UPDATE_APPROVAL_TOKEN) return true;
+  const token = UPDATE_APPROVAL_TOKEN.toLowerCase();
+  const values = [
+    payload && payload.approvalToken,
+    payload && payload.updateApproval,
+    payload && payload.rolloutToken,
+    payload && payload.rollout,
+    payload && payload.releaseChannel,
+    payload && payload.name,
+    payload && payload.tag,
+    payload && payload.tag_name,
+    payload && payload.body
+  ];
+  return values.some((value) => String(value || '').toLowerCase().includes(token));
+}
+
+function selectAsarUpdateAsset(assets) {
+  const list = normalizeReleaseAssets(assets).filter((item) => /\.asar$/i.test(item.name));
+  if (list.length === 0) return null;
+
+  const score = (name) => {
+    let value = 0;
+    if (/xeno/i.test(name)) value += 3;
+    if (/app/i.test(name)) value += 2;
+    if (/update|patch/i.test(name)) value += 1;
+    if (/portable|setup|installer/i.test(name)) value -= 4;
+    return value;
+  };
+
+  list.sort((a, b) => {
+    const byScore = score(b.name) - score(a.name);
+    if (byScore !== 0) return byScore;
+    return (b.size || 0) - (a.size || 0);
+  });
+  return list[0];
+}
+
 function selectWindowsSetupAsset(assets) {
   const list = normalizeReleaseAssets(assets).filter((item) => /\.(exe|msi)$/i.test(item.name));
   if (list.length === 0) return null;
@@ -601,6 +659,64 @@ function launchPortableSelfUpdater(downloadedExePath) {
   }
 }
 
+function getCurrentAppAsarPath() {
+  try {
+    const resources = process.resourcesPath ? String(process.resourcesPath) : '';
+    if (!resources) return '';
+    return path.join(resources, 'app.asar');
+  } catch {
+    return '';
+  }
+}
+
+function launchAsarSelfUpdater(downloadedAsarPath) {
+  try {
+    const src = path.resolve(String(downloadedAsarPath || '').trim());
+    const dst = path.resolve(getCurrentAppAsarPath());
+    const exe = path.resolve(app.getPath('exe'));
+    if (!src || !dst || !exe || src.toLowerCase() === dst.toLowerCase()) return false;
+    const backup = `${dst}.bak`;
+
+    const script = [
+      `$src=${psQuote(src)}`,
+      `$dst=${psQuote(dst)}`,
+      `$bak=${psQuote(backup)}`,
+      `$exe=${psQuote(exe)}`,
+      '$ok=$false',
+      'for($i=0;$i -lt 120;$i++){',
+      '  try {',
+      '    if(Test-Path -LiteralPath $bak){ Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }',
+      '    if(Test-Path -LiteralPath $dst){ Move-Item -LiteralPath $dst -Destination $bak -Force }',
+      '    Copy-Item -LiteralPath $src -Destination $dst -Force',
+      '    $ok=$true',
+      '    break',
+      '  } catch {',
+      '    Start-Sleep -Milliseconds 500',
+      '  }',
+      '}',
+      'if(-not $ok -and (Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){',
+      '  Move-Item -LiteralPath $bak -Destination $dst -Force',
+      '}',
+      'if($ok){',
+      '  Start-Sleep -Milliseconds 250',
+      '  Start-Process -FilePath $exe | Out-Null',
+      '}'
+    ].join(';');
+
+    return spawnDetached('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-WindowStyle',
+      'Hidden',
+      '-Command',
+      script
+    ]);
+  } catch {
+    return false;
+  }
+}
+
 async function fetchLatestReleaseInfo() {
   if (UPDATE_MANIFEST_URL) {
     const manifest = await requestJsonWithMethod(
@@ -616,9 +732,22 @@ async function fetchLatestReleaseInfo() {
       manifest.version || manifest.latestVersion || manifest.tag || manifest.tagName || ''
     );
     const assets = normalizeReleaseAssets(manifest.assets || []);
+    const markerFromManifest = String(
+      manifest.updateMarker
+      || manifest.buildId
+      || manifest.releaseId
+      || manifest.marker
+      || ''
+    ).trim();
+    const marker = markerFromManifest || `manifest:${version || '0.0.0'}:${buildReleaseAssetsMarker(assets)}`;
+    const approved = manifest && manifest.approved === true
+      ? true
+      : isReleaseApproved(manifest);
     return {
       version,
       assets,
+      marker,
+      approved,
       htmlUrl: String(manifest.url || manifest.releaseUrl || '').trim(),
       source: 'manifest'
     };
@@ -654,9 +783,13 @@ async function fetchLatestReleaseInfo() {
 
   const version = normalizeVersion(data.tag_name || data.name || '');
   const assets = normalizeReleaseAssets(data.assets || []);
+  const marker = `github:${String(data.id || data.tag_name || version || 'latest')}:${buildReleaseAssetsMarker(assets)}`;
+  const approved = isReleaseApproved(data);
   return {
     version,
     assets,
+    marker,
+    approved,
     htmlUrl: String(data.html_url || '').trim(),
     source: `github:${repo}`
   };
@@ -700,22 +833,51 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { skipped: true, error: String(err) };
   }
 
-  if (!latest || !latest.version) {
+  if (!latest || (!latest.version && !latest.marker)) {
     appendFocusLog('UPDATE No release information');
     send({ text: 'No hay actualizaciones del launcher.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { skipped: true };
   }
 
   const current = normalizeVersion(app.getVersion());
-  if (compareAppVersions(latest.version, current) <= 0) {
+  const latestVersion = normalizeVersion(latest.version || current);
+  const hasVersionUpdate = compareAppVersions(latestVersion, current) > 0;
+  const latestMarker = String(latest.marker || '').trim();
+  const appliedMarker = String(store.get('lastAppliedUpdateMarker', '') || '').trim();
+  const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
+
+  if (!hasVersionUpdate && !hasMarkerUpdate) {
     appendFocusLog(`UPDATE Up to date (${current})`);
     send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { upToDate: true };
   }
 
-  appendFocusLog(`UPDATE Found new version ${latest.version} (current ${current})`);
+  if (hasVersionUpdate) {
+    appendFocusLog(`UPDATE Found new version ${latestVersion} (current ${current})`);
+  } else {
+    appendFocusLog(`UPDATE Found same-version build marker change: ${appliedMarker || '<none>'} -> ${latestMarker}`);
+  }
+
+  const approvedForPublic = latest.approved === true;
+  if (UPDATE_REQUIRE_APPROVAL && !approvedForPublic && !UPDATE_ALLOW_UNAPPROVED) {
+    appendFocusLog('UPDATE Blocked by rollout approval token');
+    send({
+      text: 'Nueva build detectada, pero aun no fue aprobada para usuarios.',
+      phase: 'up-to-date',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { blocked: true, reason: 'approval_required', version: latestVersion };
+  }
+  if (!approvedForPublic && UPDATE_ALLOW_UNAPPROVED) {
+    appendFocusLog('UPDATE Unapproved rollout allowed by local override');
+  }
+
   send({
-    text: `Nueva version del launcher ${latest.version} encontrada...`,
+    text: hasVersionUpdate
+      ? `Nueva version del launcher ${latestVersion} encontrada...`
+      : 'Nueva compilacion del launcher encontrada...',
     phase: 'downloading',
     progress: 0,
     indeterminate: false,
@@ -730,7 +892,142 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       progress: null,
       indeterminate: false
     });
-    return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
+    return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
+  }
+
+  const asarAsset = selectAsarUpdateAsset(latest.assets);
+  const currentAsarPath = getCurrentAppAsarPath();
+  const canWriteAsar = !!currentAsarPath && hasDirectoryWriteAccess(path.dirname(currentAsarPath));
+  if (asarAsset && canWriteAsar) {
+    const updatesDir = path.join(app.getPath('userData'), 'updates');
+    ensureDir(updatesDir);
+    const patchPath = path.join(updatesDir, sanitizeFileName(asarAsset.name));
+    appendFocusLog(`UPDATE Asset selected (asar): ${asarAsset.name}`);
+    try {
+      if (fs.existsSync(patchPath)) fs.unlinkSync(patchPath);
+    } catch {
+      // ignore
+    }
+
+    let lastPercent = -1;
+    send({
+      text: 'Descargando parche del launcher... 0%',
+      phase: 'downloading',
+      progress: 0,
+      indeterminate: false,
+      showProgress: true
+    });
+
+    const downloadPromise = downloadFile(asarAsset.url, patchPath, (ratio) => {
+      const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
+      if (pct === lastPercent) return;
+      if (pct < 100 && pct - lastPercent < 2) return;
+      lastPercent = pct;
+      send({
+        text: `Descargando parche del launcher... ${pct}%`,
+        phase: 'downloading',
+        progress: pct,
+        indeterminate: false,
+        showProgress: true
+      });
+    });
+
+    try {
+      await Promise.race([
+        downloadPromise,
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new Error('Timeout de descarga.')), UPDATE_DOWNLOAD_TIMEOUT_MS);
+        })
+      ]);
+    } catch (err) {
+      appendFocusLog(`UPDATE ASAR download failed: ${String(err)}`);
+      send({
+        text: 'Fallo la descarga del parche del launcher. Continuando...',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, failed: true, error: String(err) };
+    }
+
+    try {
+      const stat = fs.statSync(patchPath);
+      const ext = path.extname(patchPath).toLowerCase();
+      if (ext !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
+        throw new Error('Parche ASAR invalido.');
+      }
+    } catch (err) {
+      appendFocusLog(`UPDATE ASAR validation failed: ${String(err)}`);
+      send({
+        text: 'El parche del launcher no es valido. Continuando...',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, failed: true, error: String(err) };
+    }
+
+    send({
+      text: 'Aplicando parche del launcher...',
+      phase: 'installing',
+      progress: 100,
+      indeterminate: true,
+      showProgress: true
+    });
+
+    const launched = launchAsarSelfUpdater(patchPath);
+    if (!launched) {
+      appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
+      send({
+        text: 'No se pudo aplicar el parche del launcher.',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, failed: true, error: 'No se pudo iniciar actualizacion ASAR.' };
+    }
+
+    appendFocusLog(`UPDATE ASAR updater launched: ${patchPath}`);
+    if (latestMarker) {
+      store.set('lastAppliedUpdateMarker', latestMarker);
+    }
+    send({
+      text: 'Parche aplicado. Reiniciando launcher...',
+      phase: 'installing',
+      progress: 100,
+      indeterminate: true,
+      showProgress: true
+    });
+    return { installing: true, version: latestVersion, mode: 'asar' };
+  }
+
+  if (asarAsset && !canWriteAsar) {
+    appendFocusLog(`UPDATE ASAR asset found but no write access: ${currentAsarPath || '<unknown>'}`);
+    if (!UPDATE_ALLOW_BINARY_FALLBACK) {
+      send({
+        text: 'No hay permisos para aplicar el parche del launcher en esta instalacion.',
+        phase: 'manual',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
+    }
+  }
+
+  if (!asarAsset && !UPDATE_ALLOW_BINARY_FALLBACK) {
+    appendFocusLog('UPDATE Missing ASAR patch asset (binary fallback disabled)');
+    send({
+      text: 'Release sin parche .asar. Update pausado hasta que publiques parche.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
   }
 
   const winUpdateMode = getWindowsUpdateMode();
@@ -752,7 +1049,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       progress: null,
       indeterminate: false
     });
-    return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
+    return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
   }
 
   const selectedExt = path.extname(String(selectedAsset.name || '')).toLowerCase();
@@ -768,7 +1065,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       progress: null,
       indeterminate: false
     });
-    return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
+    return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
   }
 
   if (winUpdateMode === 'portable') {
@@ -787,7 +1084,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
         progress: null,
         indeterminate: false
       });
-      return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
+      return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
     }
   }
 
@@ -889,6 +1186,9 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   }
 
   appendFocusLog(`UPDATE Installer launched: ${installerPath}`);
+  if (latestMarker) {
+    store.set('lastAppliedUpdateMarker', latestMarker);
+  }
   send({
     text: winUpdateMode === 'portable'
       ? 'Actualizacion portable lista. Reiniciando...'
@@ -898,7 +1198,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     indeterminate: true,
     showProgress: true
   });
-  return { installing: true, version: latest.version, mode: winUpdateMode };
+  return { installing: true, version: latestVersion, mode: winUpdateMode };
 }
 
 function extractForgeMcVersions(promos) {
@@ -1559,9 +1859,60 @@ function removeSkinForUser(username) {
   skinServer.removeSkin(cacheUser);
 }
 
+function compactUuid(value) {
+  return String(value || '').toLowerCase().replace(/[^a-f0-9]/g, '');
+}
+
+function formatUuid(value) {
+  const compact = compactUuid(value);
+  if (compact.length !== 32) return null;
+  return `${compact.slice(0, 8)}-${compact.slice(8, 12)}-${compact.slice(12, 16)}-${compact.slice(16, 20)}-${compact.slice(20, 32)}`;
+}
+
+function createRandomUuid() {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID();
+  const bytes = crypto.randomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function getElyClientToken() {
+  let token = String(store.get('elyClientToken', '') || '').trim();
+  if (!formatUuid(token)) {
+    token = createRandomUuid();
+    store.set('elyClientToken', token);
+  }
+  return token;
+}
+
+function normalizeProfileData(profile) {
+  if (!profile || typeof profile !== 'object') return null;
+  const name = String(profile.name || '').trim();
+  if (!name) return null;
+
+  const normalized = {
+    name,
+    authType: profile.authType === 'ely' ? 'ely' : 'offline',
+    avatarData: profile.avatarData ? String(profile.avatarData) : null,
+    skinData: profile.skinData ? String(profile.skinData) : null,
+    skinModel: profile.skinModel === 'slim' ? 'slim' : (profile.skinModel === 'classic' ? 'classic' : null),
+    updatedAt: Number(profile.updatedAt) || Date.now()
+  };
+
+  if (normalized.authType === 'ely') {
+    normalized.uuid = formatUuid(profile.uuid || '');
+    normalized.accessToken = String(profile.accessToken || '').trim();
+    normalized.clientToken = formatUuid(profile.clientToken || '') || getElyClientToken();
+  }
+
+  return normalized;
+}
+
 function getStoredProfile() {
-  const profile = store.get('profile', null);
-  if (!profile || !profile.name) return null;
+  const profile = normalizeProfileData(store.get('profile', null));
+  if (!profile) return null;
   return profile;
 }
 
@@ -1701,6 +2052,183 @@ function requestJsonWithMethod(method, targetUrl, body = null, extraHeaders = {}
     if (payload != null) req.write(payload);
     req.end();
   });
+}
+
+async function authenticateElyByCredentials(login, password) {
+  const username = String(login || '').trim();
+  const pwd = String(password || '');
+  if (!username || !pwd) {
+    throw new Error('Debes ingresar usuario y contrasena de Ely.by.');
+  }
+
+  const clientToken = getElyClientToken();
+  const payload = {
+    username,
+    password: pwd,
+    clientToken,
+    requestUser: true,
+    agent: {
+      name: 'Minecraft',
+      version: 1
+    }
+  };
+
+  const response = await requestJsonWithMethod(
+    'POST',
+    `${ELY_AUTH_SERVER_URL}/auth/authenticate`,
+    payload,
+    { 'Content-Type': 'application/json' },
+    2,
+    12000
+  );
+
+  const selectedProfile = response && response.selectedProfile
+    ? response.selectedProfile
+    : (Array.isArray(response && response.availableProfiles) ? response.availableProfiles[0] : null);
+
+  const profileName = selectedProfile && selectedProfile.name ? String(selectedProfile.name).trim() : '';
+  const profileUuid = formatUuid(selectedProfile && selectedProfile.id ? selectedProfile.id : '');
+  const accessToken = String(response && response.accessToken ? response.accessToken : '').trim();
+  const responseClientToken = formatUuid(response && response.clientToken ? response.clientToken : '') || clientToken;
+
+  if (!profileName || !profileUuid || !accessToken) {
+    throw new Error('Respuesta invalida del servidor Ely.by.');
+  }
+
+  store.set('elyClientToken', responseClientToken);
+  return {
+    name: profileName,
+    uuid: profileUuid,
+    accessToken,
+    clientToken: responseClientToken
+  };
+}
+
+async function validateElyToken(profile) {
+  if (!profile || !profile.accessToken) return false;
+  const clientToken = formatUuid(profile.clientToken || '') || getElyClientToken();
+  try {
+    await requestJsonWithMethod(
+      'POST',
+      `${ELY_AUTH_SERVER_URL}/auth/validate`,
+      {
+        accessToken: String(profile.accessToken).trim(),
+        clientToken
+      },
+      { 'Content-Type': 'application/json' },
+      1,
+      6000
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function refreshElySession(profile) {
+  if (!profile || !profile.accessToken) {
+    throw new Error('Sesion Ely.by invalida.');
+  }
+  const clientToken = formatUuid(profile.clientToken || '') || getElyClientToken();
+  const requestBody = {
+    accessToken: String(profile.accessToken).trim(),
+    clientToken,
+    requestUser: true
+  };
+
+  const selectedUuid = compactUuid(profile.uuid || '');
+  const selectedName = String(profile.name || '').trim();
+  if (selectedUuid && selectedName) {
+    requestBody.selectedProfile = {
+      id: selectedUuid,
+      name: selectedName
+    };
+  }
+
+  const response = await requestJsonWithMethod(
+    'POST',
+    `${ELY_AUTH_SERVER_URL}/auth/refresh`,
+    requestBody,
+    { 'Content-Type': 'application/json' },
+    2,
+    12000
+  );
+
+  const selectedProfile = response && response.selectedProfile
+    ? response.selectedProfile
+    : (selectedUuid && selectedName ? { id: selectedUuid, name: selectedName } : null);
+
+  const nextName = selectedProfile && selectedProfile.name
+    ? String(selectedProfile.name).trim()
+    : selectedName;
+  const nextUuid = formatUuid(selectedProfile && selectedProfile.id ? selectedProfile.id : selectedUuid);
+  const nextAccessToken = String(response && response.accessToken ? response.accessToken : '').trim();
+  const nextClientToken = formatUuid(response && response.clientToken ? response.clientToken : '') || clientToken;
+
+  if (!nextName || !nextUuid || !nextAccessToken) {
+    throw new Error('No se pudo refrescar la sesion de Ely.by.');
+  }
+
+  store.set('elyClientToken', nextClientToken);
+  return {
+    ...profile,
+    authType: 'ely',
+    name: nextName,
+    uuid: nextUuid,
+    accessToken: nextAccessToken,
+    clientToken: nextClientToken,
+    updatedAt: Date.now()
+  };
+}
+
+async function ensureLaunchProfileAuth(profile, fallbackName = 'Offline') {
+  const normalized = normalizeProfileData(profile);
+  if (!normalized || normalized.authType !== 'ely') {
+    const resolvedName = normalized && normalized.name
+      ? normalized.name
+      : String(fallbackName || 'Offline');
+    const auth = buildOfflineAuth(resolvedName);
+    return {
+      profile: {
+        name: auth.name,
+        authType: 'offline'
+      },
+      authType: 'offline',
+      authorization: auth
+    };
+  }
+
+  if (await validateElyToken(normalized)) {
+    return {
+      profile: normalized,
+      authType: 'ely',
+      authorization: {
+        access_token: normalized.accessToken,
+        client_token: normalized.clientToken || getElyClientToken(),
+        uuid: normalized.uuid,
+        name: normalized.name,
+        user_properties: '{}'
+      }
+    };
+  }
+
+  try {
+    const refreshed = await refreshElySession(normalized);
+    store.set('profile', refreshed);
+    return {
+      profile: refreshed,
+      authType: 'ely',
+      authorization: {
+        access_token: refreshed.accessToken,
+        client_token: refreshed.clientToken || getElyClientToken(),
+        uuid: refreshed.uuid,
+        name: refreshed.name,
+        user_properties: '{}'
+      }
+    };
+  } catch (err) {
+    throw new Error(`La sesion Ely.by expiro. Inicia sesion otra vez. Detalle: ${String(err)}`);
+  }
 }
 
 async function isSharedSkinServiceReachable(config) {
@@ -1909,9 +2437,18 @@ async function ensureAuthlibInjectorJar() {
   throw new Error(lastErr ? `${String(lastErr)}${details}` : `No se pudo descargar authlib-injector.${details}`);
 }
 
-async function attachSkinLaunchArgs(opts, username) {
+async function attachSkinLaunchArgs(opts, username, authType = 'offline') {
   const targetUser = String(username || '').trim();
   if (!targetUser) return 'disabled';
+
+  if (authType === 'ely') {
+    const authlibJar = await ensureAuthlibInjectorJar();
+    const arg = `-javaagent:${authlibJar}=${ELY_AUTHLIB_INJECTOR_TARGET}`;
+    if (!Array.isArray(opts.customArgs)) opts.customArgs = [];
+    if (!opts.customArgs.includes(arg)) opts.customArgs.push(arg);
+    appendFocusLog(`SKIN Auth mode=ely url=${ELY_AUTH_SERVER_URL}`);
+    return 'ely';
+  }
 
   const profile = getStoredProfile();
   const profileSkin = profile && profile.skinData ? String(profile.skinData) : null;
@@ -2315,7 +2852,7 @@ async function initializeLauncherRuntime() {
   }
 
   const storedProfile = getStoredProfile();
-  if (storedProfile && storedProfile.skinData) {
+  if (storedProfile && storedProfile.authType !== 'ely' && storedProfile.skinData) {
     const storedModel = storedProfile.skinModel === 'slim' ? 'slim' : 'classic';
     applySkinForUser(storedProfile.name, storedProfile.skinData, storedModel);
     syncSkinToSharedService(storedProfile.name, storedProfile.skinData, storedModel)
@@ -2639,49 +3176,113 @@ ipcMain.on('get-profile', (event) => {
   event.reply('profile-data', getStoredProfile());
 });
 
+ipcMain.on('ely-login', async (event, data) => {
+  const requestId = data && data.requestId ? String(data.requestId) : null;
+  const login = data && data.login ? String(data.login) : '';
+  const password = data && data.password ? String(data.password) : '';
+
+  try {
+    const authData = await authenticateElyByCredentials(login, password);
+    const previous = getStoredProfile();
+
+    const profile = {
+      name: authData.name,
+      authType: 'ely',
+      uuid: authData.uuid,
+      accessToken: authData.accessToken,
+      clientToken: authData.clientToken,
+      avatarData: previous && previous.avatarData ? previous.avatarData : null,
+      skinData: null,
+      skinModel: null,
+      updatedAt: Date.now()
+    };
+
+    store.set('profile', profile);
+    event.sender.send('profile-data', profile);
+    event.sender.send('ely-login-result', {
+      requestId,
+      ok: true,
+      profile: {
+        name: profile.name,
+        authType: profile.authType
+      }
+    });
+    appendFocusLog(`ELY Login ok: ${profile.name}`);
+  } catch (err) {
+    const msg = err ? String(err) : 'No se pudo iniciar sesion con Ely.by.';
+    event.sender.send('ely-login-result', {
+      requestId,
+      ok: false,
+      error: msg
+    });
+    appendFocusLog(`ELY Login failed: ${msg}`);
+  }
+});
+
 ipcMain.on('save-profile', (event, data) => {
   if (!data || !data.name) return;
   const previous = getStoredProfile();
-  const profileName = String(data.name).trim();
+  const incomingName = String(data.name).trim();
+  if (!incomingName) return;
+
+  const requestedAuthType = data.authType === 'ely' ? 'ely' : 'offline';
+  const effectiveAuthType = previous && previous.authType === 'ely'
+    ? 'ely'
+    : requestedAuthType;
+  const profileName = effectiveAuthType === 'ely' && previous && previous.name
+    ? String(previous.name).trim()
+    : incomingName;
   if (!profileName) return;
+
   const profile = {
     name: profileName,
+    authType: effectiveAuthType,
     avatarData: data.avatarData ? String(data.avatarData) : null,
     skinData: data.skinData ? String(data.skinData) : null,
     skinModel: data.skinModel === 'slim' ? 'slim' : 'classic',
     updatedAt: Date.now()
   };
 
-  if (profile.skinData) {
-    const ok = applySkinForUser(profile.name, profile.skinData, profile.skinModel);
-    if (!ok) profile.skinData = null;
-  }
+  if (profile.authType === 'ely') {
+    profile.uuid = previous && previous.uuid ? formatUuid(previous.uuid) : null;
+    profile.accessToken = previous && previous.accessToken ? String(previous.accessToken).trim() : '';
+    profile.clientToken = previous && previous.clientToken
+      ? formatUuid(previous.clientToken)
+      : getElyClientToken();
+  } else {
+    if (profile.skinData) {
+      const ok = applySkinForUser(profile.name, profile.skinData, profile.skinModel);
+      if (!ok) profile.skinData = null;
+    }
 
-  if (!profile.skinData) {
-    removeSkinForUser(profile.name);
-    profile.skinModel = null;
-  }
+    if (!profile.skinData) {
+      removeSkinForUser(profile.name);
+      profile.skinModel = null;
+    }
 
-  if (
-    previous &&
-    previous.name &&
-    String(previous.name).trim().toLowerCase() !== profile.name.toLowerCase()
-  ) {
-    removeSkinForUser(previous.name);
+    if (
+      previous &&
+      previous.name &&
+      String(previous.name).trim().toLowerCase() !== profile.name.toLowerCase()
+    ) {
+      removeSkinForUser(previous.name);
+    }
   }
 
   store.set('profile', profile);
   event.reply('profile-data', profile);
 
-  if (profile.skinData) {
-    syncSkinToSharedService(profile.name, profile.skinData, profile.skinModel)
-      .then((ok) => {
-        if (ok) appendFocusLog(`SKIN Shared profile sync ok: ${profile.name}`);
-      })
-      .catch((err) => appendFocusLog(`SKIN Shared profile sync failed: ${String(err)}`));
-  } else {
-    deleteSkinFromSharedService(profile.name)
-      .catch((err) => appendFocusLog(`SKIN Shared delete failed (${profile.name}): ${String(err)}`));
+  if (profile.authType !== 'ely') {
+    if (profile.skinData) {
+      syncSkinToSharedService(profile.name, profile.skinData, profile.skinModel)
+        .then((ok) => {
+          if (ok) appendFocusLog(`SKIN Shared profile sync ok: ${profile.name}`);
+        })
+        .catch((err) => appendFocusLog(`SKIN Shared profile sync failed: ${String(err)}`));
+    } else {
+      deleteSkinFromSharedService(profile.name)
+        .catch((err) => appendFocusLog(`SKIN Shared delete failed (${profile.name}): ${String(err)}`));
+    }
   }
 
   if (
@@ -3007,7 +3608,18 @@ ipcMain.on('launch-game', async (event, instanceId) => {
   const maxRam = Number.isFinite(ram) && ram > 0 ? ram : 4;
   const minRam = Math.max(1, maxRam - 1);
 
-  const auth = buildOfflineAuth(inst.username || 'Offline');
+  let launchAuth = null;
+  try {
+    launchAuth = await ensureLaunchProfileAuth(getStoredProfile(), inst.username || 'Offline');
+  } catch (err) {
+    event.sender.send('launch-error', err ? String(err) : 'No se pudo validar la sesion.');
+    return;
+  }
+  const auth = launchAuth.authorization;
+  const authType = launchAuth.authType;
+  const launchUsername = launchAuth && launchAuth.profile && launchAuth.profile.name
+    ? String(launchAuth.profile.name)
+    : String(inst.username || 'Offline');
 
   const opts = {
     authorization: auth,
@@ -3027,8 +3639,10 @@ ipcMain.on('launch-game', async (event, instanceId) => {
   }
   applyLoaderOverrides(opts, loader);
   try {
-    const skinMode = await attachSkinLaunchArgs(opts, inst.username || (auth ? auth.name : ''));
-    if (skinMode === 'shared') {
+    const skinMode = await attachSkinLaunchArgs(opts, launchUsername, authType);
+    if (skinMode === 'ely') {
+      event.sender.send('game-log', '[Skin] Ely.by activado.');
+    } else if (skinMode === 'shared') {
       event.sender.send('game-log', '[Skin] Modo compartido activado (usuarios Xeno).');
     } else if (skinMode === 'local') {
       event.sender.send('game-log', '[Skin] Modo local activado.');

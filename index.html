@@ -290,6 +290,18 @@
             image-rendering: pixelated;
             image-rendering: crisp-edges;
         }
+        .skin-preview-empty {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 18px;
+            font-size: 13px;
+            color: var(--text-dim);
+            line-height: 1.35;
+        }
         .skin-3d-dom {
             position: absolute;
             inset: 0;
@@ -357,6 +369,9 @@
         .skin-current-status { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-dim); }
         .skin-current-status.has-skin { color: var(--success); }
         .skin-current-status svg { width: 12px; height: 12px; fill: currentColor; }
+        .skin-help-text { margin: 0; font-size: 11px; color: var(--text-dim); line-height: 1.35; min-height: 16px; }
+        .skin-help-text a { color: var(--primary); text-decoration: none; font-weight: 600; }
+        .skin-help-text a:hover { text-decoration: underline; }
         .btn-skin-upload { padding: 8px 12px; background: linear-gradient(135deg, var(--secondary), var(--primary)); border: none; border-radius: 4px; color: #000; font-weight: 600; font-size: 11px; cursor: pointer; transition: var(--transition); display: flex; align-items: center; justify-content: center; gap: 6px; }
         .btn-skin-upload:hover { filter: brightness(1.1); transform: translateY(-1px); }
         .btn-skin-upload svg { width: 14px; height: 14px; fill: currentColor; }
@@ -382,6 +397,7 @@
         #view-skins .btn-remove-skin { padding: 8px 12px; font-size: 12px; border-radius: 6px; }
         #view-skins .skin-current-status { font-size: 13px; }
         #view-skins .skin-current-status svg { width: 14px; height: 14px; }
+        #view-skins .skin-help-text { font-size: 12px; min-height: 18px; }
 
         .instance-list-item { background: rgba(255,255,255,0.03); border: 1px solid var(--border); padding: 15px; border-radius: 8px; margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; transition: var(--transition); }
         .instance-list-item:hover { background: rgba(255,255,255,0.06); border-color: var(--primary); }
@@ -459,10 +475,15 @@
                     <div id="login-panel" class="login-box">
                         <h2 style="margin-bottom: 20px;">Iniciar Sesi&oacute;n</h2>
                         <div class="login-tabs">
-                            <button class="tab-btn" onclick="setLoginMode('premium', event)">Premium</button>
+                            <button class="tab-btn" onclick="setLoginMode('premium', event)">Ely.by</button>
                             <button class="tab-btn active" onclick="setLoginMode('cracked', event)">No-Premium</button>
                         </div>
-                        <div id="form-premium" style="display:none;"><p style="font-size: 11px; color: var(--text-dim);">Pr&oacute;ximamente.</p></div>
+                        <div id="form-premium" style="display:none;">
+                            <div class="input-group"><label>Usuario o Email (Ely.by)</label><input type="text" id="ely-login" class="custom-input" placeholder="usuario@email.com"></div>
+                            <div class="input-group"><label>Contrasena</label><input type="password" id="ely-password" class="custom-input" placeholder="Tu contrasena"></div>
+                            <button class="action-btn" onclick="handleLogin('ely')">Entrar con Ely.by</button>
+                            <button class="action-btn btn-secondary" style="margin-top: 8px;" onclick="openExternal('https://ely.by/register')">Crear cuenta Ely.by</button>
+                        </div>
                         <div id="form-cracked">
                             <div class="input-group"><label>Usuario (Offline)</label><input type="text" id="offline-username" class="custom-input" placeholder="Ej: Steve"></div>
                             <button class="action-btn" onclick="handleLogin('offline')">Jugar Offline</button>
@@ -515,6 +536,7 @@
                             <div class="skin-3d-wrapper">
                                 <div id="skin-viewer-3d" class="skin-3d-dom"></div>
                                 <canvas id="skin-canvas" class="skin-canvas" width="200" height="300"></canvas>
+                                <div id="skin-preview-empty" class="skin-preview-empty">No tienes subida una skin</div>
                             </div>
                             <div class="skin-controls">
                                 <div class="skin-model-mode">
@@ -535,8 +557,9 @@
                                 </div>
                                 <div id="skin-status" class="skin-current-status">
                                     <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
-                                    <span id="skin-status-text">Sin skin</span>
+                                    <span id="skin-status-text">No tienes subida una skin</span>
                                 </div>
+                                <p id="skin-help-text" class="skin-help-text"></p>
                                 <button id="btn-remove-skin" class="btn-remove-skin" style="display: none;" onclick="removeSkin()">Eliminar Skin</button>
                             </div>
                         </div>
@@ -695,6 +718,7 @@
         const api = window.xeno;
 
         let currentUser = null;
+        let currentAuthType = 'offline';
         let ramSetting = 4;
         let selectedVersion = null;
         let selectedLoader = "Vanilla";
@@ -724,6 +748,8 @@
         let skinFaceTextureCache = new Map();
         let usernameCheckSeq = 0;
         const pendingUsernameChecks = new Map();
+        let elyLoginSeq = 0;
+        const pendingElyLogins = new Map();
         let loginBusy = false;
 
         const SKIN_MODEL_UNIT = 6;
@@ -786,15 +812,25 @@
         function applyProfile(profile) {
             if (profile && profile.name) {
                 currentUser = String(profile.name).trim();
+                currentAuthType = profile.authType === 'ely' ? 'ely' : 'offline';
                 currentAvatarData = profile.avatarData || null;
                 currentSkinData = profile.skinData || null;
                 if (profile.skinModel === 'slim') currentSkinSlim = true;
                 else if (profile.skinModel === 'classic') currentSkinSlim = false;
 
                 document.getElementById('display-username').innerText = currentUser;
-                document.getElementById('account-type').innerText = "Cuenta Offline";
+                document.getElementById('account-type').innerText = currentAuthType === 'ely' ? "Cuenta Ely.by" : "Cuenta Offline";
                 document.getElementById('profile-username-input').value = currentUser;
                 document.getElementById('offline-username').value = currentUser;
+
+                const profileNameInput = document.getElementById('profile-username-input');
+                if (profileNameInput) {
+                    profileNameInput.readOnly = currentAuthType === 'ely';
+                    profileNameInput.style.opacity = currentAuthType === 'ely' ? '0.7' : '1';
+                    profileNameInput.title = currentAuthType === 'ely'
+                        ? 'El nombre de una cuenta Ely.by se cambia desde Ely.by'
+                        : '';
+                }
 
                 document.getElementById('login-panel').style.display = 'none';
                 document.getElementById('logged-panel').style.display = 'block';
@@ -804,6 +840,7 @@
                 loadSkinImage(currentSkinData);
             } else {
                 currentUser = null;
+                currentAuthType = 'offline';
                 currentAvatarData = null;
                 currentSkinData = null;
                 currentSkinSlim = false;
@@ -814,6 +851,12 @@
                 document.getElementById('account-type').innerText = "No Conectado";
                 document.getElementById('profile-username-input').value = '';
                 document.getElementById('offline-username').value = '';
+                const profileNameInput = document.getElementById('profile-username-input');
+                if (profileNameInput) {
+                    profileNameInput.readOnly = false;
+                    profileNameInput.style.opacity = '1';
+                    profileNameInput.title = '';
+                }
 
                 document.getElementById('login-panel').style.display = 'block';
                 document.getElementById('logged-panel').style.display = 'none';
@@ -901,9 +944,12 @@
         }
 
         function syncSkinPreviewMode() {
-            const use3D = !!(currentSkinImg && skinViewer3D && skinModelEl);
-            if (skinCanvas) skinCanvas.style.display = use3D ? 'none' : 'block';
-            if (skinViewer3D) skinViewer3D.style.display = use3D ? 'block' : 'none';
+            const hasSkin = !!(currentSkinImg && currentSkinData);
+            const use3D = !!(hasSkin && skinViewer3D && skinModelEl);
+            const emptyState = document.getElementById('skin-preview-empty');
+            if (skinCanvas) skinCanvas.style.display = hasSkin && !use3D ? 'block' : 'none';
+            if (skinViewer3D) skinViewer3D.style.display = hasSkin && use3D ? 'block' : 'none';
+            if (emptyState) emptyState.style.display = hasSkin ? 'none' : 'flex';
         }
 
         function startSkinAnimation() {
@@ -1177,6 +1223,10 @@
 
             const w = skinCanvas.width;
             const h = skinCanvas.height;
+            if (!currentSkinImg) {
+                skinCtx.clearRect(0, 0, w, h);
+                return;
+            }
             const cx = Math.floor(w / 2);
 
             skinCtx.clearRect(0, 0, w, h);
@@ -1276,7 +1326,8 @@
                 }
 
             } else {
-                drawSteveDefault(cx, startY, headSize, bodyW, bodyH, armW, armH, legW, legH, rot);
+                // Sin skin: no dibujar placeholder, se muestra texto en la vista.
+                return;
             }
         }
 
@@ -1372,20 +1423,45 @@
         function updateSkinStatus() {
             const statusContainer = document.getElementById('skin-status');
             const statusText = document.getElementById('skin-status-text');
+            const helpText = document.getElementById('skin-help-text');
             const removeBtn = document.getElementById('btn-remove-skin');
+            const uploadBtn = document.querySelector('label[for="skin-upload"]');
+            const uploadInput = document.getElementById('skin-upload');
+            const modelMode = document.getElementById('skin-model-mode');
 
-            if (currentSkinData) {
+            const isEly = currentAuthType === 'ely';
+            if (uploadInput) uploadInput.disabled = isEly;
+            if (modelMode) modelMode.disabled = isEly;
+            if (uploadBtn) {
+                uploadBtn.style.opacity = isEly ? '0.5' : '1';
+                uploadBtn.style.pointerEvents = isEly ? 'none' : 'auto';
+                uploadBtn.title = isEly ? 'Con Ely.by, la skin no se sube desde aqui.' : '';
+            }
+
+            const hasLocalSkin = !!(currentSkinData && currentSkinImg && !isEly);
+            if (hasLocalSkin) {
                 if (statusContainer) statusContainer.classList.add('has-skin');
                 if (statusText) statusText.textContent = 'Skin cargada';
+                if (helpText) helpText.textContent = '';
                 if (removeBtn) removeBtn.style.display = 'block';
             } else {
                 if (statusContainer) statusContainer.classList.remove('has-skin');
-                if (statusText) statusText.textContent = 'Sin skin';
+                if (statusText) statusText.textContent = 'No tienes subida una skin';
+                if (helpText) {
+                    helpText.innerHTML = isEly
+                        ? 'Para cambiarla, ve a <a href="#" onclick="openExternal(\'https://ely.by/skins\'); return false;">Ely.by</a>.'
+                        : '';
+                }
                 if (removeBtn) removeBtn.style.display = 'none';
             }
         }
 
         function previewSkin(input) {
+            if (currentAuthType === 'ely') {
+                showToast('Con cuenta Ely.by la skin se gestiona desde Ely.by.', 'neutral');
+                if (input) input.value = '';
+                return;
+            }
             if (input.files && input.files[0]) {
                 const file = input.files[0];
                 
@@ -1429,6 +1505,10 @@
         }
 
         function removeSkin() {
+            if (currentAuthType === 'ely') {
+                showToast('Con cuenta Ely.by la skin se gestiona desde Ely.by.', 'neutral');
+                return;
+            }
             currentSkinData = null;
             currentSkinImg = null;
             currentSkinSlim = false;
@@ -1468,6 +1548,24 @@
                     if (e.key === 'Enter') requestInstall();
                 });
             }
+            const offlineUserInput = document.getElementById('offline-username');
+            if (offlineUserInput) {
+                offlineUserInput.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') handleLogin('offline');
+                });
+            }
+            const elyLoginInput = document.getElementById('ely-login');
+            const elyPasswordInput = document.getElementById('ely-password');
+            if (elyLoginInput) {
+                elyLoginInput.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') handleLogin('ely');
+                });
+            }
+            if (elyPasswordInput) {
+                elyPasswordInput.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') handleLogin('ely');
+                });
+            }
 
             const optifineInput = document.getElementById('addon-optifine');
             if (optifineInput) {
@@ -1502,6 +1600,14 @@
             const done = pendingUsernameChecks.get(requestId);
             pendingUsernameChecks.delete(requestId);
             done(data || { checked: false, exists: false, serviceUrl: null });
+        });
+
+        api && api.on && api.on('ely-login-result', (event, data) => {
+            const requestId = data && data.requestId ? String(data.requestId) : null;
+            if (!requestId || !pendingElyLogins.has(requestId)) return;
+            const done = pendingElyLogins.get(requestId);
+            pendingElyLogins.delete(requestId);
+            done(data || { ok: false, error: 'Respuesta invalida de Ely.by.' });
         });
 
         api && api.on && api.on('open-instance-folder-error', (event, msg) => {
@@ -1650,10 +1756,35 @@
             }
         }
 
+        function requestElyLogin(login, password) {
+            return new Promise((resolve) => {
+                if (!api || !api.send) {
+                    resolve({ ok: false, error: 'IPC no disponible.' });
+                    return;
+                }
+                const requestId = `ely_login_${Date.now()}_${++elyLoginSeq}`;
+                pendingElyLogins.set(requestId, resolve);
+                api.send('ely-login', {
+                    requestId,
+                    login: String(login || '').trim(),
+                    password: String(password || '')
+                });
+                setTimeout(() => {
+                    if (pendingElyLogins.has(requestId)) {
+                        const done = pendingElyLogins.get(requestId);
+                        pendingElyLogins.delete(requestId);
+                        done({ ok: false, error: 'Timeout al conectar con Ely.by.' });
+                    }
+                }, 20000);
+            });
+        }
+
         async function handleLogin(type) {
             if (loginBusy) return;
             loginBusy = true;
             const usernameInput = document.getElementById('offline-username');
+            const elyLoginInput = document.getElementById('ely-login');
+            const elyPasswordInput = document.getElementById('ely-password');
             try {
                 if(type === 'offline') {
                     const value = usernameInput.value.trim();
@@ -1669,10 +1800,35 @@
                         return;
                     }
                     currentUser = value;
+                    currentAuthType = 'offline';
+                } else if (type === 'ely') {
+                    const loginValue = elyLoginInput ? elyLoginInput.value.trim() : '';
+                    const passValue = elyPasswordInput ? elyPasswordInput.value : '';
+                    if (!loginValue || !passValue) {
+                        showToast("Ingresa usuario y contrasena de Ely.by", "error");
+                        return;
+                    }
+
+                    const result = await requestElyLogin(loginValue, passValue);
+                    if (!result || !result.ok || !result.profile || !result.profile.name) {
+                        showToast(result && result.error ? result.error : "No se pudo iniciar sesion con Ely.by", "error");
+                        return;
+                    }
+                    currentUser = String(result.profile.name).trim();
+                    currentAuthType = 'ely';
+                    if (elyPasswordInput) elyPasswordInput.value = '';
                 }
                 document.getElementById('display-username').innerText = currentUser;
-                document.getElementById('account-type').innerText = "Cuenta Offline";
+                document.getElementById('account-type').innerText = currentAuthType === 'ely' ? "Cuenta Ely.by" : "Cuenta Offline";
                 document.getElementById('profile-username-input').value = currentUser;
+                const profileNameInput = document.getElementById('profile-username-input');
+                if (profileNameInput) {
+                    profileNameInput.readOnly = currentAuthType === 'ely';
+                    profileNameInput.style.opacity = currentAuthType === 'ely' ? '0.7' : '1';
+                    profileNameInput.title = currentAuthType === 'ely'
+                        ? 'El nombre de una cuenta Ely.by se cambia desde Ely.by'
+                        : '';
+                }
                 document.getElementById('login-panel').style.display = 'none';
                 document.getElementById('logged-panel').style.display = 'block';
                 applyAvatar(currentAvatarData);
@@ -1698,6 +1854,7 @@
         function performLogout() {
             logFocus('logout-confirmed');
             currentUser = null;
+            currentAuthType = 'offline';
             currentInstanceId = null;
             currentSkinData = null;
             currentSkinImg = null;
@@ -1710,8 +1867,15 @@
             document.getElementById('logged-panel').style.display = 'none';
             document.getElementById('form-premium').style.display = 'none';
             document.getElementById('form-cracked').style.display = 'block';
+            document.getElementById('profile-username-input').readOnly = false;
+            document.getElementById('profile-username-input').style.opacity = '1';
+            document.getElementById('profile-username-input').title = '';
             const userInput = document.getElementById('offline-username');
             userInput.value = '';
+            const elyUserInput = document.getElementById('ely-login');
+            const elyPassInput = document.getElementById('ely-password');
+            if (elyUserInput) elyUserInput.value = '';
+            if (elyPassInput) elyPassInput.value = '';
             currentAvatarData = null;
             applyAvatar(null);
             updateSkinStatus();
@@ -1735,18 +1899,23 @@
         }
 
         async function saveProfile() {
-            const newName = document.getElementById('profile-username-input').value.trim();
+            let newName = document.getElementById('profile-username-input').value.trim();
+            if (currentAuthType === 'ely') {
+                newName = String(currentUser || '').trim();
+            }
             if(newName) {
-                const oldName = String(currentUser || '').trim();
-                if (!oldName || oldName.toLowerCase() !== newName.toLowerCase()) {
-                    const conflict = await checkUsernameConflict(newName);
-                    if (skinServiceUrl && (!conflict || !conflict.checked)) {
-                        showToast("No se pudo verificar el usuario en el servicio de skins.", "error");
-                        return;
-                    }
-                    if (conflict && conflict.checked && conflict.exists) {
-                        showToast("Ese usuario ya esta registrado en skins compartidas.", "error");
-                        return;
+                if (currentAuthType !== 'ely') {
+                    const oldName = String(currentUser || '').trim();
+                    if (!oldName || oldName.toLowerCase() !== newName.toLowerCase()) {
+                        const conflict = await checkUsernameConflict(newName);
+                        if (skinServiceUrl && (!conflict || !conflict.checked)) {
+                            showToast("No se pudo verificar el usuario en el servicio de skins.", "error");
+                            return;
+                        }
+                        if (conflict && conflict.checked && conflict.exists) {
+                            showToast("Ese usuario ya esta registrado en skins compartidas.", "error");
+                            return;
+                        }
                     }
                 }
                 currentUser = newName;
@@ -1787,6 +1956,7 @@
             if (!profileName) return;
             api.send('save-profile', {
                 name: profileName,
+                authType: currentAuthType,
                 avatarData: currentAvatarData,
                 skinData: currentSkinData,
                 skinModel: resolveSkinModelForProfile()

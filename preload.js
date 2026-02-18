@@ -20,7 +20,8 @@ const sendChannels = new Set([
   'open-external',
   'get-settings',
   'set-skin-service-settings',
-  'check-username-conflict'
+  'check-username-conflict',
+  'ely-login'
 ]);
 
 const onChannels = new Set([
@@ -47,7 +48,8 @@ const onChannels = new Set([
   'fabric-versions-error',
   'java-guide',
   'settings-data',
-  'username-conflict-result'
+  'username-conflict-result',
+  'ely-login-result'
 ]);
 
 contextBridge.exposeInMainWorld('xeno', {

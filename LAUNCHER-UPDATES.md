@@ -1,145 +1,123 @@
-﻿# Xeno Launcher Updates (Setup + Portable)
+﻿# Xeno Launcher Updates
 
 ## ES (Espanol)
 
-El launcher ya soporta actualizacion real al iniciar para builds empaquetadas (`app.isPackaged`) en **dos modos**:
-- `setup` (instalado con NSIS)
-- `portable` (ejecutable portable)
+### Objetivo
+- Los usuarios actualizan desde el splash, sin descargar manualmente setup/portable.
+- **No se publica ni se activa update global sin tu permiso.**
 
-### Como decide el update
+### Como funciona ahora
+Al iniciar (si `XENO_UPDATE_MODE=auto`), el launcher busca updates y aplica este orden:
 
-1. Resuelve fuente de update (orden):
-   - `XENO_UPDATE_MANIFEST_URL`
-   - `XENO_UPDATE_REPO`
-   - `repository` en `package.json`
-2. Compara `app.getVersion()` vs ultima release.
-3. Si hay version nueva:
-   - En modo `setup`: busca asset instalador (`Setup/Installer .exe/.msi`).
-   - En modo `portable`: busca asset portable (`Portable .exe`).
-4. Descarga, valida, instala/aplica y reinicia launcher.
+1. **Parche ASAR (preferido)**
+   - Asset esperado: archivo `.asar` en la release (ejemplo: `XenoLauncher-App-1.0.0.asar`).
+   - Este modo actualiza solo el codigo del launcher y reinicia.
+   - Es el flujo mas liviano para cambios frecuentes.
+2. Setup/Portable (fallback opcional)
+   - Solo se usa si activas `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
+   - Por defecto esta desactivado para evitar bajar setup/portable nuevamente.
 
-### Importante
+### Bloqueo de rollout (permiso manual)
+Por defecto, la app **no aplica** una release nueva para usuarios si no esta aprobada.
 
-- Esto **no** actualiza Windows.
-- Esto solo actualiza **Xeno Launcher**.
-- No publica nada automaticamente. Publicar release sigue siendo manual.
-- En `portable`, si no hay permisos de escritura en la carpeta del `.exe`, se fuerza update manual.
+Aprobacion por token:
+- Token default: `XENO_PUBLIC_UPDATE`
+- La release queda aprobada si ese token aparece en:
+  - titulo de release, o
+  - tag, o
+  - descripcion/body.
 
-### Modo auto/manual
+Si el token no aparece:
+- Los usuarios ven la app normal (no se actualizan).
+- El log marca que la build fue bloqueada por aprobacion.
 
-- Auto (default): revisa updates al iniciar.
-- Manual: no revisa updates.
-
-Forzar manual:
-
+Override solo para pruebas locales del owner:
 ```powershell
-$env:XENO_UPDATE_MODE="manual"
+$env:XENO_UPDATE_ALLOW_UNAPPROVED="true"
 npm start
 ```
 
-Forzar auto:
+### Variables utiles
+- `XENO_UPDATE_MODE=auto|manual`
+- `XENO_UPDATE_REQUIRE_APPROVAL=true|false` (default: `true`)
+- `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
+- `XENO_UPDATE_ALLOW_UNAPPROVED=true` (solo local)
+- `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
 
-```powershell
-$env:XENO_UPDATE_MODE="auto"
-npm start
-```
-
-Permitir pre-releases:
-
-```powershell
-$env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
-npm start
-```
-
-### Como publicar para que actualice Setup y Portable
-
-1. Subir cambios a GitHub.
-2. Subir version en `package.json` (ejemplo `1.0.1`).
-3. Compilar ambos artefactos:
-
+### Flujo recomendado de release
+1. Compilar:
 ```bash
 npm install
 npm run build:release:win
 ```
-
-4. Crear release con tag `v<version>` (ejemplo `v1.0.1`).
-5. Adjuntar ambos archivos de `dist/`:
-   - `XenoLauncher-Setup-<version>.exe`
-   - `XenoLauncher-Portable-<version>.exe`
-6. Publicar release (no `draft`).
-7. En el proximo inicio:
-   - Usuarios setup -> update setup.
-   - Usuarios portable -> update portable.
+2. Eso genera en `dist/`:
+- `XenoLauncher-Setup-<version>.exe`
+- `XenoLauncher-Portable-<version>.exe`
+- `XenoLauncher-App-<version>.asar`
+3. Crear release en GitHub y subir assets.
+4. Pruebas privadas:
+- deja la release sin token de aprobacion.
+5. Publicar para todos:
+- agrega `XENO_PUBLIC_UPDATE` en el body/titulo/tag de la release.
 
 ---
 
 ## EN (English)
 
-The launcher now supports real startup updates for packaged builds (`app.isPackaged`) in **two modes**:
-- `setup` (NSIS installed app)
-- `portable` (portable executable)
+### Goal
+- Users update directly from splash, without manually re-downloading setup/portable.
+- **No global rollout happens without your permission.**
 
-### How update detection works
+### Current behavior
+On startup (if `XENO_UPDATE_MODE=auto`), launcher checks updates in this order:
 
-1. It resolves update source (order):
-   - `XENO_UPDATE_MANIFEST_URL`
-   - `XENO_UPDATE_REPO`
-   - `repository` in `package.json`
-2. It compares `app.getVersion()` with the latest release.
-3. If a newer version exists:
-   - In `setup` mode: it looks for setup installer asset (`Setup/Installer .exe/.msi`).
-   - In `portable` mode: it looks for portable asset (`Portable .exe`).
-4. It downloads, validates, applies/installs, and restarts.
+1. **ASAR patch (preferred)**
+   - Expected asset: `.asar` file in the release (example: `XenoLauncher-App-1.0.0.asar`).
+   - Updates launcher code only, then restarts.
+   - This is the lightest flow for frequent code changes.
+2. Setup/Portable (optional fallback)
+   - Only used if `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
+   - Disabled by default to avoid re-downloading setup/portable.
 
-### Important
+### Rollout lock (manual permission)
+By default, app **does not apply** new release for users unless it is approved.
 
-- This does **not** update Windows.
-- It only updates **Xeno Launcher**.
-- Nothing is published automatically. Release publishing is still manual.
-- In `portable` mode, if write permission is missing on the current `.exe` folder, update falls back to manual.
+Approval token:
+- Default token: `XENO_PUBLIC_UPDATE`
+- Release is approved when token exists in:
+  - release title, or
+  - tag, or
+  - release body.
 
-### Auto/manual mode
+If token is missing:
+- Users are not updated.
+- Log records update blocked by approval.
 
-- Auto (default): checks updates on startup.
-- Manual: skips update checks.
-
-Force manual:
-
+Owner-only local testing override:
 ```powershell
-$env:XENO_UPDATE_MODE="manual"
+$env:XENO_UPDATE_ALLOW_UNAPPROVED="true"
 npm start
 ```
 
-Force auto:
+### Useful env vars
+- `XENO_UPDATE_MODE=auto|manual`
+- `XENO_UPDATE_REQUIRE_APPROVAL=true|false` (default: `true`)
+- `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
+- `XENO_UPDATE_ALLOW_UNAPPROVED=true` (local only)
+- `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
 
-```powershell
-$env:XENO_UPDATE_MODE="auto"
-npm start
-```
-
-Allow pre-releases:
-
-```powershell
-$env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
-npm start
-```
-
-### Release flow so Setup and Portable both update
-
-1. Push changes to GitHub.
-2. Bump `package.json` version (example `1.0.1`).
-3. Build both artifacts:
-
+### Recommended release flow
+1. Build:
 ```bash
 npm install
 npm run build:release:win
 ```
-
-4. Create release tag `v<version>` (example `v1.0.1`).
-5. Upload both files from `dist/`:
-   - `XenoLauncher-Setup-<version>.exe`
-   - `XenoLauncher-Portable-<version>.exe`
-6. Publish release (not `draft`).
-7. On next launcher start:
-   - Setup users get setup update.
-   - Portable users get portable update.
+2. This produces in `dist/`:
+- `XenoLauncher-Setup-<version>.exe`
+- `XenoLauncher-Portable-<version>.exe`
+- `XenoLauncher-App-<version>.asar`
+3. Create GitHub release and upload assets.
+4. Private testing:
+- keep release without approval token.
+5. Public rollout:
+- add `XENO_PUBLIC_UPDATE` to release body/title/tag.
