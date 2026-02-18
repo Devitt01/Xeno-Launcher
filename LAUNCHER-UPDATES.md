@@ -49,15 +49,15 @@ $env:XENO_UPDATE_INCLUDE_PRERELEASE="true"
 npm start
 ```
 
-### Requisito para que funcione a tus usuarios
+### Requisito para distribucion a usuarios
 
-Debes publicar releases con version mayor a la instalada (ej: `1.0.1`, `1.0.2`) y adjuntar instalador Windows.
+Para que los clientes reciban actualizaciones, se debe publicar una release con version mayor a la instalada (ej: `1.0.1`, `1.0.2`) y adjuntar un instalador de Windows.
 
 ### Flujo recomendado (GitHub Releases)
 
-1. Sube el repo a GitHub.
-2. Define `repository` en `package.json` con tu repo.
-3. Sube cambios de version en `package.json` (ej: `1.0.1`).
+1. Subir el repositorio a GitHub.
+2. Definir `repository` en `package.json` con la URL del repositorio.
+3. Actualizar version en `package.json` (ej: `1.0.1`).
 4. Compila instalador:
 
 ```bash
@@ -65,10 +65,10 @@ npm install
 npm run build:win
 ```
 
-5. Crea release en GitHub con tag `v<version>` (ej: `v1.0.1`).
-6. Adjunta `dist/XenoLauncher-Setup-<version>.exe` a la release.
-7. Marca la release como publicada (no `draft`).
-8. Al abrir launcher, tus usuarios reciben la actualizacion.
+5. Crear release en GitHub con tag `v<version>` (ej: `v1.0.1`).
+6. Adjuntar `dist/XenoLauncher-Setup-<version>.exe` a la release.
+7. Publicar la release (no `draft`).
+8. En el siguiente inicio del launcher, los clientes reciben la actualizacion.
 
 ---
 

@@ -6,13 +6,13 @@
     <title>Xeno Launcher</title>
     <style>
         :root {
-            --bg-dark: #0a0a0f;
-            --bg-panel: #13131f;
-            --primary: #46f6ff;
-            --secondary: #2b6dff;
+            --bg-dark: #050911;
+            --bg-panel: #0d1424;
+            --primary: #44f4ff;
+            --secondary: #2c7bff;
             --text-main: #ffffff;
             --text-dim: #8b9bb4;
-            --border: rgba(255,255,255, 0.1);
+            --border: rgba(122, 177, 255, 0.16);
             --success: #00ff88;
             --error: #ff0055;
             --radius: 12px;
@@ -33,15 +33,28 @@
         }
         
         body { 
-            background-color: var(--bg-dark); color: var(--text-main); height:100vh; overflow: hidden; 
-            display: flex; justify-content: center; align-items: center; 
+            background:
+                radial-gradient(700px 460px at 8% 8%, rgba(68, 244, 255, 0.12), transparent 60%),
+                radial-gradient(900px 540px at 95% 95%, rgba(44, 123, 255, 0.13), transparent 62%),
+                linear-gradient(155deg, #050911 0%, #080f1d 45%, #040811 100%);
+            color: var(--text-main);
+            height:100vh;
+            overflow: hidden; 
+            display: flex;
+            justify-content: center;
+            align-items: center; 
         }
         
         #app-container {
             width: 100%; height: 100%; max-width: 1200px; max-height: 800px;
             display: grid; grid-template-columns: 280px 1fr;
-            background: var(--bg-panel); border-radius: 0; 
-            box-shadow: 0 0 50px rgba(0,0,0,0.5); overflow: hidden; position: relative;
+            background:
+                linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0)),
+                var(--bg-panel);
+            border-radius: 0; 
+            box-shadow: 0 30px 80px rgba(0, 6, 20, 0.72), 0 0 0 1px rgba(68, 244, 255, 0.06) inset;
+            overflow: hidden;
+            position: relative;
         }
         @media (min-width: 1200px) { 
             #app-container { 
@@ -49,18 +62,47 @@
             } 
         }
         
-        .sidebar { background: rgba(0,0,0,0.2); padding: 20px; display: flex; flex-direction: column; border-right: 1px solid var(--border); }
-        .brand { font-size: 24px; font-weight: 800; letter-spacing: 2px; color: var(--text-main); margin-bottom: 40px; display: flex; align-items: center; gap: 10px; text-shadow: 0 0 10px rgba(0, 240, 255, 0.5); }
-        .brand span { color: var(--primary); }
+        .sidebar {
+            background:
+                linear-gradient(180deg, rgba(68, 244, 255, 0.07) 0%, rgba(44, 123, 255, 0.03) 28%, rgba(0, 0, 0, 0) 100%),
+                rgba(0,0,0,0.22);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid var(--border);
+            backdrop-filter: blur(6px);
+        }
+        .brand {
+            font-size: 24px;
+            font-weight: 800;
+            letter-spacing: 2px;
+            color: var(--text-main);
+            margin-bottom: 40px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            text-shadow: 0 0 14px rgba(0, 240, 255, 0.38);
+        }
+        .brand span {
+            color: transparent;
+            background: linear-gradient(90deg, #44f4ff 0%, #2c7bff 95%);
+            -webkit-background-clip: text;
+            background-clip: text;
+        }
         .nav-menu { list-style: none; flex: 1; }
         .nav-item { margin-bottom: 10px; }
-        .nav-btn { width: 100%; padding: 12px 15px; background: transparent; border: none; color: var(--text-dim); text-align: left; cursor: pointer; border-radius: var(--radius); font-size: 15px; font-weight: 500; transition: var(--transition); display: flex; align-items: center; gap: 12px; }
-        .nav-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-main); }
-        .nav-btn.active { background: linear-gradient(90deg, rgba(0, 240, 255, 0.1), transparent); color: var(--primary); border-left:3px solid var(--primary); }
+        .nav-btn { width: 100%; padding: 13px 15px; background: transparent; border: none; color: var(--text-dim); text-align: left; cursor: pointer; border-radius: var(--radius); font-size: 15px; font-weight: 600; transition: var(--transition); display: flex; align-items: center; gap: 12px; }
+        .nav-btn:hover { background: rgba(255,255,255,0.05); color: var(--text-main); transform: translateX(2px); }
+        .nav-btn.active {
+            background: linear-gradient(90deg, rgba(68, 244, 255, 0.16), rgba(44, 123, 255, 0.04) 75%, transparent);
+            color: var(--primary);
+            border-left:3px solid var(--primary);
+            box-shadow: 0 0 20px rgba(68, 244, 255, 0.12) inset;
+        }
         
         .user-status { padding-top: 20px; border-top: 1px solid var(--border); }
-        .user-card { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: var(--radius); cursor: pointer; transition: var(--transition); border: 1px solid transparent; }
-        .user-card:hover { background: rgba(255,255,255,0.05); border-color: var(--primary); }
+        .user-card { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.3); padding: 10px; border-radius: var(--radius); cursor: pointer; transition: var(--transition); border: 1px solid rgba(68, 244, 255, 0.08); }
+        .user-card:hover { background: rgba(255,255,255,0.05); border-color: rgba(68, 244, 255, 0.42); box-shadow: 0 0 18px rgba(68, 244, 255, 0.14); }
         .user-avatar { width: 36px; height: 36px; background: #000; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; display: flex; align-items: center; justify-content: center; }
         .user-avatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
         .user-avatar svg { width: 20px; height: 20px; fill: var(--text-dim); }
@@ -68,13 +110,50 @@
         .user-info p { font-size: 11px; color: var(--success); }
 
         .main-content { position: relative; display: flex; flex-direction: column; overflow: hidden; }
-        .view-header { padding: 20px 30px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: var(--bg-panel); }
+        .main-content::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: radial-gradient(520px 280px at 45% -8%, rgba(68, 244, 255, 0.12), transparent 72%);
+        }
+        .view-header {
+            padding: 20px 30px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: linear-gradient(90deg, rgba(68, 244, 255, 0.05), rgba(44, 123, 255, 0.02) 42%, rgba(0,0,0,0) 100%), var(--bg-panel);
+            backdrop-filter: blur(8px);
+            z-index: 2;
+        }
         .view-title { font-size: 28px; font-weight: 300; }
         .view-title b { font-weight: 700; color: var(--primary); }
-        .views-container { flex: 1; padding: 30px; overflow-y: auto; position: relative; background: var(--bg-dark); }
+        .views-container {
+            flex: 1;
+            padding: 32px 38px;
+            overflow-y: auto;
+            position: relative;
+            background:
+                radial-gradient(640px 340px at 8% 2%, rgba(68, 244, 255, 0.07), transparent 62%),
+                radial-gradient(620px 300px at 90% 100%, rgba(44, 123, 255, 0.09), transparent 65%),
+                var(--bg-dark);
+            z-index: 1;
+        }
         .view-section { display: none; animation: fadeIn 0.4s ease; }
         .view-section.active { display: block; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        .news-grid { display: grid; gap: 14px; }
+        .news-card {
+            background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02));
+            padding: 20px;
+            border-radius: 14px;
+            border: 1px solid rgba(122, 177, 255, 0.22);
+            box-shadow: 0 14px 36px rgba(0, 10, 32, 0.45);
+        }
+        .news-card h3 { color: #fff; margin-bottom: 10px; }
+        .news-card p { color: var(--text-dim); line-height: 1.35; }
 
         .login-box { max-width: 400px; margin: 0 auto; background: rgba(255,255,255,0.05); padding: 30px; border-radius: var(--radius); border: 1px solid var(--border); text-align: center; }
         .login-tabs { display: flex; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
@@ -101,9 +180,34 @@
         .btn-danger { background: var(--error); text-transform: none; }
         .btn-danger:hover { background: #d40047; }
 
-        .play-bar { height: 80px; background: rgba(0,0,0,0.4); border-top: 1px solid var(--border); display: flex; align-items: center; padding: 0 30px; gap: 15px; backdrop-filter: blur(10px); }
-        .play-btn { width: 50px; height: 50px; border-radius: 50%; background: var(--success); border: none; color: #000; font-size: 24px; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(0, 255, 136, 0.4); transition: var(--transition); }
-        .play-btn:hover { transform: scale(1.1) rotate(90deg); }
+        .play-bar {
+            height: 84px;
+            background:
+                linear-gradient(90deg, rgba(68, 244, 255, 0.05), rgba(44, 123, 255, 0.04) 45%, rgba(0,0,0,0.3) 100%),
+                rgba(0,0,0,0.48);
+            border-top: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            padding: 0 30px;
+            gap: 15px;
+            backdrop-filter: blur(10px);
+        }
+        .play-btn {
+            width: 54px;
+            height: 54px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #13ffa0, #00d580);
+            border: none;
+            color: #001f13;
+            font-size: 24px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 0 0 1px rgba(102, 255, 193, 0.25), 0 0 26px rgba(0, 255, 136, 0.35);
+            transition: var(--transition);
+        }
+        .play-btn:hover { transform: scale(1.08); }
         .ui-locked { opacity: 0.4; pointer-events: none; filter: grayscale(100%); cursor: not-allowed !important; }
         .instance-selector-wrapper { display: flex; gap: 10px; flex: 1; max-width: 400px; }
         .instance-display-btn { flex: 1; background: rgba(0,0,0,0.3); border: 1px solid var(--border); padding: 10px 15px; border-radius: 6px; color: white; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: var(--transition); text-align: left; }
@@ -363,9 +467,9 @@
                     </div>
                     <h2 style="margin-top: 30px; margin-bottom: 12px; font-size: 18px; color: var(--text-main);">Novedades</h2>
                     <div class="news-grid">
-                         <article class="news-card" style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 12px; border: 1px solid var(--border);">
-                            <h3 style="color:white; margin-bottom:10px;">Sistema de Skins</h3>
-                            <p style="color:var(--text-dim);">Sube tu skin personalizada desde la secci&oacute;n Skins. Solo los usuarios de Xeno Launcher podran verla.</p>
+                         <article class="news-card">
+                            <h3>Sistema de Skins</h3>
+                            <p>Sube tu skin personalizada desde la secci&oacute;n Skins. Solo los usuarios de Xeno Launcher podran verla.</p>
                         </article>
                     </div>
                 </section>

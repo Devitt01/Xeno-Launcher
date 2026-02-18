@@ -1,5 +1,5 @@
 // Archivo: main.js
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 try {
@@ -21,9 +21,15 @@ try {
 }
 const skinServer = require('./skin-server');
 
-const APP_ICON = path.join(__dirname, 'Logos xeno', 'Logo_xeno.png');
+const APP_ID = 'com.xeno.launcher';
+const APP_ICON_ICO = path.join(__dirname, 'build', 'icon.ico');
+const APP_ICON_PNG = path.join(__dirname, 'Logos xeno', 'Logo_xeno.png');
+const APP_ICON = fs.existsSync(APP_ICON_ICO) ? APP_ICON_ICO : APP_ICON_PNG;
 
 app.disableHardwareAcceleration();
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID);
+}
 
 const store = new Store({
   name: 'xeno-launcher',
@@ -42,7 +48,13 @@ const store = new Store({
 
 let mainWindow = null;
 let splashWindow = null;
-let pendingSplashStatus = 'Buscando actualizaciones...';
+let pendingSplashStatus = {
+  text: 'Buscando actualizaciones...',
+  phase: 'checking',
+  progress: null,
+  indeterminate: true,
+  showProgress: true
+};
 const activeLaunches = new Map();
 const activeInstalls = new Map();
 
@@ -534,18 +546,24 @@ async function fetchLatestReleaseInfo() {
 
 async function checkAndInstallLauncherUpdate(reportStatus) {
   const send = typeof reportStatus === 'function' ? reportStatus : () => {};
-  send('Buscando actualizaciones del launcher...');
+  send({
+    text: 'Buscando actualizaciones del launcher...',
+    phase: 'checking',
+    progress: null,
+    indeterminate: true,
+    showProgress: true
+  });
 
   const updateSource = getUpdateSourceLabel();
   if (!updateSource) {
     appendFocusLog('UPDATE Source not configured');
-    send('Iniciando launcher...');
+    send({ text: 'Iniciando launcher...', showProgress: false, progress: null, indeterminate: false });
     return { skipped: true };
   }
 
   if (!app.isPackaged) {
     appendFocusLog(`UPDATE Skipped (dev mode) source=${updateSource}`);
-    send('Modo desarrollo detectado. Continuando...');
+    send({ text: 'Modo desarrollo detectado. Continuando...', showProgress: false, progress: null, indeterminate: false });
     return { skipped: true };
   }
 
@@ -554,35 +572,59 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     latest = await fetchLatestReleaseInfo();
   } catch (err) {
     appendFocusLog(`UPDATE Check failed: ${String(err)}`);
-    send('No se pudo verificar actualizaciones del launcher. Continuando...');
+    send({
+      text: 'No se pudo verificar actualizaciones del launcher. Continuando...',
+      phase: 'error',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     return { skipped: true, error: String(err) };
   }
 
   if (!latest || !latest.version) {
     appendFocusLog('UPDATE No release information');
-    send('No hay actualizaciones del launcher.');
+    send({ text: 'No hay actualizaciones del launcher.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { skipped: true };
   }
 
   const current = normalizeVersion(app.getVersion());
   if (compareAppVersions(latest.version, current) <= 0) {
     appendFocusLog(`UPDATE Up to date (${current})`);
-    send('Launcher actualizado.');
+    send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { upToDate: true };
   }
 
   appendFocusLog(`UPDATE Found new version ${latest.version} (current ${current})`);
-  send(`Nueva version del launcher ${latest.version} encontrada...`);
+  send({
+    text: `Nueva version del launcher ${latest.version} encontrada...`,
+    phase: 'downloading',
+    progress: 0,
+    indeterminate: false,
+    showProgress: true
+  });
 
   if (process.platform !== 'win32') {
-    send('Actualizacion del launcher disponible. Instala manualmente.');
+    send({
+      text: 'Actualizacion del launcher disponible. Instala manualmente.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
   }
 
   const installerAsset = selectWindowsInstallerAsset(latest.assets);
   if (!installerAsset) {
     appendFocusLog('UPDATE No Windows installer asset found');
-    send('Actualizacion del launcher disponible. Instala manualmente.');
+    send({
+      text: 'Actualizacion del launcher disponible. Instala manualmente.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     return { updateAvailable: true, manual: true, version: latest.version, url: latest.htmlUrl || null };
   }
 
@@ -596,14 +638,26 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   }
 
   let lastPercent = -1;
-  send('Descargando actualizacion del launcher... 0%');
+  send({
+    text: 'Descargando actualizacion del launcher... 0%',
+    phase: 'downloading',
+    progress: 0,
+    indeterminate: false,
+    showProgress: true
+  });
 
   const downloadPromise = downloadFile(installerAsset.url, installerPath, (ratio) => {
     const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
     if (pct === lastPercent) return;
     if (pct < 100 && pct - lastPercent < 2) return;
     lastPercent = pct;
-    send(`Descargando actualizacion del launcher... ${pct}%`);
+    send({
+      text: `Descargando actualizacion del launcher... ${pct}%`,
+      phase: 'downloading',
+      progress: pct,
+      indeterminate: false,
+      showProgress: true
+    });
   });
 
   try {
@@ -615,7 +669,13 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     ]);
   } catch (err) {
     appendFocusLog(`UPDATE Download failed: ${String(err)}`);
-    send('Fallo la descarga de actualizacion del launcher. Continuando...');
+    send({
+      text: 'Fallo la descarga de actualizacion del launcher. Continuando...',
+      phase: 'error',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     return { updateAvailable: true, failed: true, error: String(err) };
   }
 
@@ -627,20 +687,44 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     }
   } catch (err) {
     appendFocusLog(`UPDATE Downloaded installer validation failed: ${String(err)}`);
-    send('La actualizacion descargada no es valida. Continuando...');
+    send({
+      text: 'La actualizacion descargada no es valida. Continuando...',
+      phase: 'error',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     return { updateAvailable: true, failed: true, error: String(err) };
   }
 
-  send('Instalando actualizacion del launcher...');
+  send({
+    text: 'Instalando actualizacion del launcher...',
+    phase: 'installing',
+    progress: 100,
+    indeterminate: true,
+    showProgress: true
+  });
   const launched = launchInstaller(installerPath);
   if (!launched) {
     appendFocusLog(`UPDATE Could not launch installer ${installerPath}`);
-    send('No se pudo iniciar el instalador.');
+    send({
+      text: 'No se pudo iniciar el instalador.',
+      phase: 'error',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     return { updateAvailable: true, failed: true, error: 'No se pudo iniciar el instalador.' };
   }
 
   appendFocusLog(`UPDATE Installer launched: ${installerPath}`);
-  send('Actualizacion del launcher lista. Reiniciando...');
+  send({
+    text: 'Actualizacion del launcher lista. Reiniciando...',
+    phase: 'installing',
+    progress: 100,
+    indeterminate: true,
+    showProgress: true
+  });
   return { installing: true, version: latest.version };
 }
 
@@ -1755,14 +1839,46 @@ async function runInstallOnly(event, inst, list, options = {}) {
   event.sender.send('install-finished', { id: inst.id, firstInstall: true, installOnly: true, source: options.source || 'create' });
 }
 
-function sendSplashStatus(text) {
-  const message = String(text || '').trim();
-  if (!message) return;
-  pendingSplashStatus = message;
-  appendFocusLog(`SPLASH ${message}`);
+function normalizeSplashPayload(payload) {
+  if (typeof payload === 'string') {
+    const text = payload.trim();
+    if (!text) return null;
+    return { text };
+  }
+  if (!payload || typeof payload !== 'object') return null;
+
+  const normalized = {};
+  if (typeof payload.text === 'string' && payload.text.trim()) normalized.text = payload.text.trim();
+  if (typeof payload.phase === 'string' && payload.phase.trim()) normalized.phase = payload.phase.trim();
+  if (typeof payload.indeterminate === 'boolean') normalized.indeterminate = payload.indeterminate;
+  if (typeof payload.showProgress === 'boolean') normalized.showProgress = payload.showProgress;
+
+  if (payload.progress === null) {
+    normalized.progress = null;
+  } else if (Number.isFinite(payload.progress)) {
+    normalized.progress = Math.max(0, Math.min(100, Math.round(payload.progress)));
+  }
+
+  return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function sendSplashStatus(payload) {
+  const normalized = normalizeSplashPayload(payload);
+  if (!normalized) return;
+
+  pendingSplashStatus = {
+    ...pendingSplashStatus,
+    ...normalized
+  };
+
+  const logMsg = pendingSplashStatus.progress === null
+    ? pendingSplashStatus.text
+    : `${pendingSplashStatus.text} (${pendingSplashStatus.progress}%)`;
+  appendFocusLog(`SPLASH ${logMsg}`);
+
   try {
     if (splashWindow && !splashWindow.isDestroyed() && splashWindow.webContents) {
-      splashWindow.webContents.send('splash-status', { text: message });
+      splashWindow.webContents.send('splash-status', pendingSplashStatus);
     }
   } catch {
     // ignore
@@ -1803,6 +1919,7 @@ function createWindow() {
     show: false,
     backgroundColor: '#0a0a0f',
     icon: APP_ICON,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -1811,6 +1928,7 @@ function createWindow() {
   });
 
   win.loadFile(path.join(__dirname, 'index.html'));
+  win.setMenuBarVisibility(false);
   mainWindow = win;
   attachWindowDiagnostics(win);
 }
@@ -1837,7 +1955,7 @@ function createSplashWindow() {
   splash.webContents.on('did-finish-load', () => {
     if (pendingSplashStatus) {
       try {
-        splash.webContents.send('splash-status', { text: pendingSplashStatus });
+        splash.webContents.send('splash-status', pendingSplashStatus);
       } catch {
         // ignore
       }
@@ -1850,6 +1968,9 @@ function createSplashWindow() {
 }
 
 app.whenReady().then(() => {
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+  }
   splashWindow = createSplashWindow();
   const splashStart = Date.now();
   let splashDone = false;
@@ -1903,23 +2024,47 @@ app.whenReady().then(() => {
         }
       } catch (err) {
         appendFocusLog(`UPDATE Fatal check error: ${String(err)}`);
-        sendSplashStatus('No se pudo verificar actualizaciones del launcher. Continuando...');
+        sendSplashStatus({
+          text: 'No se pudo verificar actualizaciones del launcher. Continuando...',
+          phase: 'error',
+          showProgress: false,
+          progress: null,
+          indeterminate: false
+        });
       }
     } else {
       appendFocusLog('UPDATE Auto-check disabled (manual mode)');
-      sendSplashStatus('Actualizaciones del launcher en modo manual.');
+      sendSplashStatus({
+        text: 'Actualizaciones del launcher en modo manual.',
+        phase: 'manual',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
     }
 
     if (quittingForUpdate) return;
 
     try {
-      sendSplashStatus('Preparando launcher...');
+      sendSplashStatus({
+        text: 'Preparando launcher...',
+        phase: 'loading',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
       await initializeLauncherRuntime();
     } catch (err) {
       appendFocusLog(`STARTUP Init failed: ${String(err)}`);
     }
 
-    sendSplashStatus('Cargando interfaz...');
+    sendSplashStatus({
+      text: 'Cargando interfaz...',
+      phase: 'ready',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
     startupReady = true;
     maybeFinishSplash();
   })();

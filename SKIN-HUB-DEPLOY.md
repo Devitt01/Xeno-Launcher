@@ -2,7 +2,7 @@
 
 ## ES (Espanol)
 
-Si quieres skins compartidas para todos (no-premium), necesitas un servicio online.
+Para habilitar skins compartidas globales (no-premium), se necesita un servicio online.
 
 ### Opcion A: sin servidor (mas facil)
 
@@ -14,8 +14,8 @@ Si quieres skins compartidas para todos (no-premium), necesitas un servicio onli
 
 #### 1) Despliegue rapido (ejemplo Render)
 
-1. Sube este proyecto a GitHub.
-2. En Render crea un **Web Service** desde tu repo.
+1. Subir este proyecto a GitHub.
+2. En Render, crear un **Web Service** desde el repositorio.
 3. Configura:
    - Build Command: `npm install`
    - Start Command: `node skin-hub-server.js`
@@ -23,13 +23,13 @@ Si quieres skins compartidas para todos (no-premium), necesitas un servicio onli
    - `XENO_SKIN_HOST=0.0.0.0`
    - `XENO_SKIN_TOKEN=pon_un_token_largo` (opcional pero recomendado)
 5. Deploy.
-6. Copia tu URL publica (ejemplo: `https://xeno-skin-hub.onrender.com`).
+6. Copiar la URL publica (ejemplo: `https://xeno-skin-hub.onrender.com`).
 
 Nota: el servidor ya soporta `PORT` automaticamente.
 
 #### 2) Probar que el hub funciona
 
-Abre en navegador:
+Abrir en navegador:
 
 - `https://TU_URL/status`
 
@@ -40,14 +40,14 @@ Debe responder JSON con `status: "ok"`.
 En Xeno Launcher > Configuracion:
 
 - Servicio de skins compartidas (URL): `https://TU_URL`
-- Token de escritura: el mismo que pusiste en `XENO_SKIN_TOKEN` (si usaste token)
+- Token de escritura: el mismo valor configurado en `XENO_SKIN_TOKEN` (si aplica)
 - Guardar.
 
 #### 4) Comportamiento actual
 
 - Si un username ya existe en skins compartidas: login bloqueado.
 - Si no puede verificarse el servicio y configuraste URL manual: bloquea login para evitar suplantacion.
-- Si no configuras URL manual: el launcher puede seguir en modo local.
+- Si no se configura URL manual: el launcher puede seguir en modo local.
 
 ### Variables disponibles
 
@@ -55,13 +55,13 @@ En Xeno Launcher > Configuracion:
 - `XENO_SKIN_HOST` (default: `0.0.0.0`)
 - `XENO_SKIN_DATA_DIR` (default: `./skin-hub-data`)
 - `XENO_SKIN_TOKEN` (protege escrituras)
-- `XENO_SKIN_BASE_URL` (si quieres forzar URL publica de texturas)
+- `XENO_SKIN_BASE_URL` (para forzar URL publica de texturas)
 
 ---
 
 ## EN (English)
 
-If you want shared skins for everyone (non-premium), you need an online service.
+To enable global shared skins (non-premium), an online service is required.
 
 ### Option A: no server (easiest)
 
@@ -74,7 +74,7 @@ If you want shared skins for everyone (non-premium), you need an online service.
 #### 1) Quick deploy (Render example)
 
 1. Push this project to GitHub.
-2. In Render, create a **Web Service** from your repo.
+2. In Render, create a **Web Service** from the repository.
 3. Configure:
    - Build Command: `npm install`
    - Start Command: `node skin-hub-server.js`
@@ -82,13 +82,13 @@ If you want shared skins for everyone (non-premium), you need an online service.
    - `XENO_SKIN_HOST=0.0.0.0`
    - `XENO_SKIN_TOKEN=use_a_long_token` (optional but recommended)
 5. Deploy.
-6. Copy your public URL (example: `https://xeno-skin-hub.onrender.com`).
+6. Copy the public URL (example: `https://xeno-skin-hub.onrender.com`).
 
 Note: the server already supports `PORT` automatically.
 
 #### 2) Verify hub is running
 
-Open in browser:
+Open in a browser:
 
 - `https://YOUR_URL/status`
 
@@ -99,14 +99,14 @@ It should return JSON with `status: "ok"`.
 In Xeno Launcher > Settings:
 
 - Shared skin service URL: `https://YOUR_URL`
-- Write token: same value as `XENO_SKIN_TOKEN` (if used)
+- Write token: same value configured in `XENO_SKIN_TOKEN` (if used)
 - Save.
 
 #### 4) Current behavior
 
 - If a username already exists in shared skins: login is blocked.
 - If service verification fails and a manual URL is configured: login is blocked to prevent impersonation.
-- If no manual URL is configured: launcher can continue in local mode.
+- If no manual URL is configured: the launcher can continue in local mode.
 
 ### Available environment variables
 

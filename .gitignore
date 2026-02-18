@@ -3,3 +3,4 @@ dist/
 skin-hub-data/
 *.log
 cloudflared.exe
+build/icon-256.png

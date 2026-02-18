@@ -6,8 +6,10 @@
   "scripts": {
     "start": "electron .",
     "skin-hub": "node skin-hub-server.js",
+    "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build:win": "electron-builder --win nsis --publish never",
-    "build:portable": "electron-builder --win portable --publish never"
+    "build:win:clean": "npm run clean:dist && electron-builder --win nsis --publish never",
+    "build:portable": "npm run clean:dist && electron-builder --win portable --publish never"
   },
   "author": "Devitt",
   "license": "ISC",
@@ -16,16 +18,17 @@
     "url": "https://github.com/Afoa0120/Xeno-Launcher.git"
   },
   "dependencies": {
-    "electron": "^22.0.0",
     "minecraft-launcher-core": "^3.14.0",
     "electron-store": "^8.1.0"
   },
   "devDependencies": {
+    "electron": "^22.0.0",
     "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "com.xeno.launcher",
     "productName": "Xeno Launcher",
+    "icon": "build/icon.ico",
     "directories": {
       "output": "dist"
     },
@@ -38,6 +41,7 @@
       "!*.log"
     ],
     "win": {
+      "icon": "build/icon.ico",
       "target": "nsis",
       "artifactName": "XenoLauncher-Setup-${version}.exe"
     },
@@ -45,7 +49,10 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico"
     },
     "publish": [
       {
