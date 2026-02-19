@@ -915,7 +915,12 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   if (asarAsset && canWriteAsar) {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     ensureDir(updatesDir);
-    const patchPath = path.join(updatesDir, sanitizeFileName(asarAsset.name));
+    const patchToken = crypto
+      .createHash('sha1')
+      .update(`${asarAsset.name}|${asarAsset.url}|${latestMarker || latestVersion || 'patch'}`)
+      .digest('hex')
+      .slice(0, 12);
+    const patchPath = path.join(updatesDir, `xeno-launcher-patch-${patchToken}.bin`);
     appendFocusLog(`UPDATE Asset selected (asar): ${asarAsset.name}`);
     try {
       if (fs.existsSync(patchPath)) fs.unlinkSync(patchPath);
@@ -967,8 +972,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
     try {
       const stat = fs.statSync(patchPath);
-      const ext = path.extname(patchPath).toLowerCase();
-      if (ext !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
+      const assetExt = path.extname(String(asarAsset.name || '')).toLowerCase();
+      if (assetExt !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
         throw new Error('Parche ASAR invalido.');
       }
     } catch (err) {
