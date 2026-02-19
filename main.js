@@ -684,12 +684,13 @@ function getCurrentAppAsarPath() {
   }
 }
 
-function launchAsarSelfUpdater(downloadedAsarPath) {
+function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '') {
   try {
     const src = path.resolve(String(downloadedAsarPath || '').trim());
     const dst = path.resolve(getCurrentAppAsarPath());
     const exe = path.resolve(app.getPath('exe'));
-    if (!src || !dst || !exe || src.toLowerCase() === dst.toLowerCase()) return false;
+    const statusPath = path.resolve(String(statusFilePath || '').trim());
+    if (!src || !dst || !exe || !statusPath || src.toLowerCase() === dst.toLowerCase()) return false;
     const backup = `${dst}.bak`;
 
     const script = [
@@ -697,6 +698,8 @@ function launchAsarSelfUpdater(downloadedAsarPath) {
       `$dst=${psQuote(dst)}`,
       `$bak=${psQuote(backup)}`,
       `$exe=${psQuote(exe)}`,
+      `$status=${psQuote(statusPath)}`,
+      `$marker=${psQuote(String(marker || ''))}`,
       '$ok=$false',
       'for($i=0;$i -lt 120;$i++){',
       '  try {',
@@ -712,6 +715,10 @@ function launchAsarSelfUpdater(downloadedAsarPath) {
       'if(-not $ok -and (Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){',
       '  Move-Item -LiteralPath $bak -Destination $dst -Force',
       '}',
+      'try {',
+      '  $payload = @{ ok = $ok; marker = $marker; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+      '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+      '} catch {}',
       'if($ok){',
       '  Start-Sleep -Milliseconds 250',
       '  Start-Process -FilePath $exe | Out-Null',
@@ -729,6 +736,39 @@ function launchAsarSelfUpdater(downloadedAsarPath) {
     ]);
   } catch {
     return false;
+  }
+}
+
+function consumeAsarUpdateStatus() {
+  try {
+    const updatesDir = path.join(app.getPath('userData'), 'updates');
+    const statusPath = path.join(updatesDir, 'asar-update-status.json');
+    if (!fs.existsSync(statusPath)) return;
+
+    let payload = null;
+    try {
+      payload = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+    } catch {
+      payload = null;
+    }
+
+    try {
+      fs.unlinkSync(statusPath);
+    } catch {
+      // ignore
+    }
+
+    if (payload && payload.ok === true && payload.marker) {
+      const marker = String(payload.marker).trim();
+      if (marker) {
+        store.set('lastAppliedUpdateMarker', marker);
+        appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker}`);
+      }
+    } else {
+      appendFocusLog('UPDATE ASAR status indicates failure');
+    }
+  } catch {
+    // ignore
   }
 }
 
@@ -916,6 +956,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   if (asarAsset && canWriteAsar) {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     ensureDir(updatesDir);
+    const statusPath = path.join(updatesDir, 'asar-update-status.json');
     const patchToken = crypto
       .createHash('sha1')
       .update(`${asarAsset.name}|${asarAsset.url}|${latestMarker || latestVersion || 'patch'}`)
@@ -925,6 +966,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     appendFocusLog(`UPDATE Asset selected (asar): ${asarAsset.name}`);
     try {
       if (fs.existsSync(patchPath)) fs.unlinkSync(patchPath);
+      if (fs.existsSync(statusPath)) fs.unlinkSync(statusPath);
     } catch {
       // ignore
     }
@@ -997,7 +1039,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       showProgress: true
     });
 
-    const launched = launchAsarSelfUpdater(patchPath);
+    const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker);
     if (!launched) {
       appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
       send({
@@ -1011,9 +1053,6 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     }
 
     appendFocusLog(`UPDATE ASAR updater launched: ${patchPath}`);
-    if (latestMarker) {
-      store.set('lastAppliedUpdateMarker', latestMarker);
-    }
     send({
       text: 'Parche aplicado. Reiniciando launcher...',
       phase: 'installing',
@@ -2959,6 +2998,7 @@ app.whenReady().then(() => {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null);
   }
+  consumeAsarUpdateStatus();
   splashWindow = createSplashWindow();
   const splashStart = Date.now();
   let splashDone = false;
