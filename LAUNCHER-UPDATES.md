@@ -9,6 +9,11 @@
 ### Como funciona ahora
 Al iniciar (si `XENO_UPDATE_MODE=auto`), el launcher busca updates y aplica este orden:
 
+0. Fuente de update (prioridad):
+   - `XENO_UPDATE_MANIFEST_URL`
+   - `XENO_UPDATE_REPO`
+   - `build.publish` (provider github) en `package.json`
+   - `repository` en `package.json`
 1. **Parche ASAR (preferido)**
    - Asset esperado: archivo `.asar` en la release (ejemplo: `XenoLauncher-App-1.0.0.asar`).
    - Este modo actualiza solo el codigo del launcher y reinicia.
@@ -71,6 +76,11 @@ npm run build:release:win
 ### Current behavior
 On startup (if `XENO_UPDATE_MODE=auto`), launcher checks updates in this order:
 
+0. Update source priority:
+   - `XENO_UPDATE_MANIFEST_URL`
+   - `XENO_UPDATE_REPO`
+   - `build.publish` (github provider) in `package.json`
+   - `repository` in `package.json`
 1. **ASAR patch (preferred)**
    - Expected asset: `.asar` file in the release (example: `XenoLauncher-App-1.0.0.asar`).
    - Updates launcher code only, then restarts.

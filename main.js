@@ -401,6 +401,20 @@ function getPackageGithubRepo() {
   try {
     const pkgPath = path.join(__dirname, 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const publish = Array.isArray(pkg && pkg.build && pkg.build.publish)
+      ? pkg.build.publish
+      : (pkg && pkg.build && pkg.build.publish ? [pkg.build.publish] : []);
+
+    for (const entry of publish) {
+      if (!entry || entry.provider !== 'github') continue;
+      const owner = String(entry.owner || '').trim();
+      const repo = String(entry.repo || '').trim();
+      if (owner && repo) {
+        cachedPackageRepo = `${owner}/${repo}`;
+        return cachedPackageRepo;
+      }
+    }
+
     const repoField = typeof pkg.repository === 'string'
       ? pkg.repository
       : (pkg.repository && pkg.repository.url) ? pkg.repository.url : '';
