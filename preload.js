@@ -19,6 +19,7 @@ const sendChannels = new Set([
   'get-fabric-versions',
   'open-external',
   'get-settings',
+  'set-java-path',
   'set-skin-service-settings',
   'check-username-conflict',
   'ely-login',
@@ -51,6 +52,7 @@ const onChannels = new Set([
   'fabric-versions-error',
   'java-guide',
   'settings-data',
+  'java-path-result',
   'username-conflict-result',
   'ely-login-result',
   'window-state'

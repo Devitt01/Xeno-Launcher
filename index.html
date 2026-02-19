@@ -583,8 +583,10 @@
                     </div>
                     <div class="input-group" style="margin-top: 20px;">
                         <label>Ruta de Java (Opcional)</label>
-                        <input type="text" class="custom-input" placeholder="Dejar vac&iacute;o" disabled style="cursor: not-allowed; opacity: 0.5;">
+                        <input id="java-path-input" type="text" class="custom-input" placeholder="Ej: C:\\Program Files\\Java\\jdk-21\\bin\\java.exe">
                     </div>
+                    <button class="action-btn btn-secondary" style="margin-top: 8px;" onclick="saveJavaPath()">Guardar ruta de Java</button>
+                    <p class="settings-note">Si esta vacio, Xeno detecta Java automaticamente.</p>
                     <div class="input-group" style="margin-top: 20px;">
                         <label>Servicio de skins compartidas (URL)</label>
                         <input type="text" id="skin-service-url" class="custom-input" placeholder="Vacio = modo local (sin servidor)">
@@ -806,6 +808,7 @@
         let currentSkinData = null;
         let installingInstanceId = null;
         let pendingCreateData = null;
+        let javaPathSetting = '';
         let skinServiceUrl = '';
         let skinServiceToken = '';
 
@@ -1654,6 +1657,12 @@
                     if (e.key === 'Enter') handleLogin('offline');
                 });
             }
+            const javaPathInput = document.getElementById('java-path-input');
+            if (javaPathInput) {
+                javaPathInput.addEventListener('keypress', function (e) {
+                    if (e.key === 'Enter') saveJavaPath();
+                });
+            }
             const elyLoginInput = document.getElementById('ely-login');
             const elyPasswordInput = document.getElementById('ely-password');
             if (elyLoginInput) {
@@ -1691,7 +1700,20 @@
         api && api.on && api.on('settings-data', (event, data) => {
             if (!data) return;
             if (data.ram !== undefined && data.ram !== null) setRamUI(data.ram);
+            setJavaPathUI(data.javaPath || '');
             setSkinServiceUI(data.skinServiceUrl, data.skinServiceToken);
+        });
+
+        api && api.on && api.on('java-path-result', (event, data) => {
+            if (!data) return;
+            if (typeof data.javaPath === 'string') {
+                setJavaPathUI(data.javaPath);
+            }
+            if (data.ok) {
+                showToast(data.message || 'Ruta de Java guardada.', 'success');
+            } else {
+                showToast(data.error || 'No se pudo guardar la ruta de Java.', 'error');
+            }
         });
 
         api && api.on && api.on('window-state', (event, data) => {
@@ -2087,6 +2109,21 @@
                     }
                 }, 2200);
             });
+        }
+
+        function setJavaPathUI(value) {
+            javaPathSetting = typeof value === 'string' ? value : '';
+            const input = document.getElementById('java-path-input');
+            if (input) input.value = javaPathSetting;
+        }
+
+        function saveJavaPath() {
+            const input = document.getElementById('java-path-input');
+            const javaPath = input ? input.value.trim() : '';
+            javaPathSetting = javaPath;
+            if (api && api.send) {
+                api.send('set-java-path', { javaPath });
+            }
         }
 
         function setSkinServiceUI(url, token) {

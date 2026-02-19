@@ -3364,11 +3364,78 @@ ipcMain.on('set-ram', (event, val) => {
   if (!Number.isNaN(num)) store.set('ram', num);
 });
 
-ipcMain.on('get-settings', (event) => {
-  event.reply('settings-data', {
+function buildSettingsPayload() {
+  return {
     ram: store.get('ram', 4),
+    javaPath: store.get('javaPath', ''),
     skinServiceUrl: store.get('skinServiceUrl', ''),
     skinServiceToken: store.get('skinServiceToken', '')
+  };
+}
+
+ipcMain.on('get-settings', (event) => {
+  event.reply('settings-data', buildSettingsPayload());
+});
+
+ipcMain.on('set-java-path', async (event, data) => {
+  const raw = data && typeof data === 'object'
+    ? String(data.javaPath || '')
+    : String(data || '');
+  const normalized = raw.trim().replace(/^"(.*)"$/, '$1').trim();
+
+  if (!normalized) {
+    store.set('javaPath', '');
+    event.reply('settings-data', buildSettingsPayload());
+    event.reply('java-path-result', {
+      ok: true,
+      javaPath: '',
+      message: 'Ruta de Java restablecida a deteccion automatica.'
+    });
+    return;
+  }
+
+  let candidate = normalized;
+  try {
+    const stat = fs.statSync(candidate);
+    if (stat.isDirectory()) {
+      candidate = path.join(candidate, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+    }
+  } catch {
+    event.reply('java-path-result', {
+      ok: false,
+      javaPath: normalized,
+      error: 'La ruta indicada no existe.'
+    });
+    return;
+  }
+
+  if (!fs.existsSync(candidate)) {
+    event.reply('java-path-result', {
+      ok: false,
+      javaPath: normalized,
+      error: 'No se encontro java en esa ruta.'
+    });
+    return;
+  }
+
+  const info = await checkJava(candidate);
+  if (!info.ok || !info.major) {
+    event.reply('java-path-result', {
+      ok: false,
+      javaPath: normalized,
+      error: 'La ruta no apunta a un Java valido.'
+    });
+    return;
+  }
+
+  store.set('javaPath', candidate);
+  appendFocusLog(`JAVA Manual path saved: ${candidate} (v${info.major})`);
+  event.reply('settings-data', buildSettingsPayload());
+  event.reply('java-path-result', {
+    ok: true,
+    javaPath: candidate,
+    major: info.major,
+    message: `Java guardado correctamente (version ${info.major}).`
   });
 });
 
@@ -3384,11 +3451,7 @@ ipcMain.on('set-skin-service-settings', (event, data) => {
   sharedSkinServiceHealthCache.ok = false;
   sharedSkinServiceHealthCache.checkedAt = 0;
 
-  event.reply('settings-data', {
-    ram: store.get('ram', 4),
-    skinServiceUrl: store.get('skinServiceUrl', ''),
-    skinServiceToken: store.get('skinServiceToken', '')
-  });
+  event.reply('settings-data', buildSettingsPayload());
 });
 
 ipcMain.on('check-username-conflict', async (event, data) => {
