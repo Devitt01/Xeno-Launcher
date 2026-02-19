@@ -26,6 +26,7 @@ const APP_ID = 'com.xeno.launcher';
 const APP_ICON_ICO = path.join(__dirname, 'build', 'icon.ico');
 const APP_ICON_PNG = path.join(__dirname, 'Logos xeno', 'Logo_xeno.png');
 const APP_ICON = fs.existsSync(APP_ICON_ICO) ? APP_ICON_ICO : APP_ICON_PNG;
+const USE_CUSTOM_CHROME = process.platform === 'win32';
 
 app.disableHardwareAcceleration();
 if (process.platform === 'win32') {
@@ -2891,6 +2892,7 @@ function createWindow() {
     show: false,
     backgroundColor: '#0a0a0f',
     icon: APP_ICON,
+    frame: !USE_CUSTOM_CHROME,
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -2903,6 +2905,20 @@ function createWindow() {
   win.setMenuBarVisibility(false);
   mainWindow = win;
   attachWindowDiagnostics(win);
+
+  const sendState = () => {
+    try {
+      if (win.webContents && !win.webContents.isDestroyed()) {
+        win.webContents.send('window-state', { maximized: win.isMaximized() });
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  win.on('maximize', sendState);
+  win.on('unmaximize', sendState);
+  win.webContents.on('did-finish-load', sendState);
 }
 
 function createSplashWindow() {
@@ -3079,6 +3095,25 @@ ipcMain.on('focus-window', () => {
   mainWindow.show();
   mainWindow.focus();
   if (mainWindow.webContents) mainWindow.webContents.focus();
+});
+
+ipcMain.on('window-minimize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.minimize();
+});
+
+ipcMain.on('window-toggle-maximize', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+  } else {
+    mainWindow.maximize();
+  }
+});
+
+ipcMain.on('window-close', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.close();
 });
 
 ipcMain.on('focus-debug', (event, data) => {
