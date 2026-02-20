@@ -464,9 +464,11 @@ function normalizeReleaseAssets(assets) {
       const url = String(item && (item.browser_download_url || item.url) ? (item.browser_download_url || item.url) : '').trim();
       if (!name || !url) return null;
       return {
+        id: Number(item && item.id ? item.id : 0) || 0,
         name,
         url,
-        size: Number(item && item.size ? item.size : 0) || 0
+        size: Number(item && item.size ? item.size : 0) || 0,
+        updatedAt: String(item && (item.updated_at || item.created_at || '') ? (item.updated_at || item.created_at || '') : '').trim()
       };
     })
     .filter(Boolean);
@@ -476,7 +478,7 @@ function buildReleaseAssetsMarker(assets) {
   const normalized = normalizeReleaseAssets(assets);
   if (normalized.length === 0) return 'no-assets';
   const raw = normalized
-    .map((item) => `${item.name}|${item.size}|${item.url}`)
+    .map((item) => `${item.id}|${item.name}|${item.size}|${item.updatedAt}|${item.url}`)
     .sort()
     .join('\n');
   return crypto.createHash('sha1').update(raw).digest('hex');
