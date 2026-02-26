@@ -1308,7 +1308,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
   appendFocusLog(`UPDATE Installer launched: ${installerPath}`);
   if (latestMarker) {
-    store.set('lastAppliedUpdateMarker', latestMarker);
+    store.set('lastUpdateAttemptMarker', latestMarker);
+    store.set('lastUpdateAttemptAt', Date.now());
   }
   send({
     text: winUpdateMode === 'portable'
@@ -1473,6 +1474,13 @@ function compareMcVersionsDesc(a, b) {
     if (av < bv) return 1;
   }
   return 0;
+}
+
+function sanitizeRamGb(value, fallback = 4) {
+  const parsed = Number(value);
+  const base = Number.isFinite(parsed) ? parsed : Number(fallback);
+  const safeBase = Number.isFinite(base) ? base : 4;
+  return Math.max(2, Math.min(16, Math.round(safeBase)));
 }
 
 function isAtLeast(version, target) {
@@ -2883,8 +2891,7 @@ async function runInstallOnly(event, inst, list, options = {}) {
 
   const auth = buildOfflineAuth(inst.username || 'Offline');
 
-  const ram = Number(store.get('ram', 4));
-  const maxRam = Number.isFinite(ram) && ram > 0 ? ram : 4;
+  const maxRam = sanitizeRamGb(store.get('ram', 4), 4);
   const minRam = Math.max(1, maxRam - 1);
 
   const opts = {
@@ -3483,13 +3490,17 @@ ipcMain.on('clear-profile', () => {
 });
 
 ipcMain.on('set-ram', (event, val) => {
-  const num = Number(val);
-  if (!Number.isNaN(num)) store.set('ram', num);
+  const safeRam = sanitizeRamGb(val, store.get('ram', 4));
+  store.set('ram', safeRam);
 });
 
 function buildSettingsPayload() {
+  const safeRam = sanitizeRamGb(store.get('ram', 4), 4);
+  if (safeRam !== store.get('ram', 4)) {
+    store.set('ram', safeRam);
+  }
   return {
-    ram: store.get('ram', 4),
+    ram: safeRam,
     javaPath: store.get('javaPath', ''),
     skinServiceUrl: store.get('skinServiceUrl', ''),
     skinServiceToken: store.get('skinServiceToken', '')
@@ -3677,8 +3688,13 @@ ipcMain.on('open-instance-folder', async (event, id) => {
 
 ipcMain.on('open-external', async (event, url) => {
   if (!url || typeof url !== 'string') return;
+  const safeUrl = normalizeHttpOrHttpsUrl(url);
+  if (!safeUrl) {
+    appendFocusLog(`OPEN_EXTERNAL blocked invalid url: ${String(url)}`);
+    return;
+  }
   try {
-    await shell.openExternal(url);
+    await shell.openExternal(safeUrl);
   } catch {
     // ignore
   }
@@ -3844,8 +3860,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
     event.sender.send('game-log', String(e));
   });
 
-  const ram = Number(store.get('ram', 4));
-  const maxRam = Number.isFinite(ram) && ram > 0 ? ram : 4;
+  const maxRam = sanitizeRamGb(store.get('ram', 4), 4);
   const minRam = Math.max(1, maxRam - 1);
 
   let launchAuth = null;

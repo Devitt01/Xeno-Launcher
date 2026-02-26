@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
@@ -541,7 +541,7 @@
             <div class="view-header">
                 <div class="view-title" id="page-title">Bienvenido a <b>Xeno</b></div>
                 <div class="header-meta">
-                    <div class="header-version">v1.0.0 BETA</div>
+                    <div class="header-version">1.0.0 BETA TEST-1</div>
                     <div class="header-disclaimer">No afiliado con Mojang Studios ni Microsoft.</div>
                 </div>
             </div>
@@ -2341,23 +2341,72 @@
             if(!container) return;
             container.innerHTML = '';
             instances.forEach(inst => {
+                const instanceId = Number(inst && inst.id);
+                if (!Number.isFinite(instanceId)) return;
+                const loaderName = String(inst && inst.loader ? inst.loader : 'Vanilla');
+                const versionText = String(inst && inst.version ? inst.version : '');
+                const displayName = String(inst && inst.name ? inst.name : 'Instancia');
+                const loaderPrefix = loaderName !== 'Vanilla' ? `${loaderName.toLowerCase()} ` : '';
+
                 const item = document.createElement('div');
                 item.className = 'instance-list-item';
-                item.innerHTML = `
-                    <div class="inst-info">
-                        <span class="inst-name">${inst.name}</span>
-                        <span class="inst-ver">${inst.loader !== 'Vanilla' ? inst.loader.toLowerCase() + ' ' : ''}${inst.version}</span>
-                    </div>
-                    <div class="inst-actions">
-                        <div class="inst-actions-row">
-                            <button class="btn-small btn-select" onclick="selectInstance(${inst.id})">Seleccionar</button>
-                            <button class="btn-small btn-delete" onclick="deleteInstance(${inst.id})">Borrar</button>
-                        </div>
-                        <button class="btn-small btn-folder" onclick="openInstanceFolder(${inst.id})">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h6z"/></svg>
-                        </button>
-                    </div>
-                `;
+
+                const info = document.createElement('div');
+                info.className = 'inst-info';
+
+                const nameEl = document.createElement('span');
+                nameEl.className = 'inst-name';
+                nameEl.textContent = displayName;
+
+                const verEl = document.createElement('span');
+                verEl.className = 'inst-ver';
+                verEl.textContent = `${loaderPrefix}${versionText}`.trim();
+
+                info.appendChild(nameEl);
+                info.appendChild(verEl);
+
+                const actions = document.createElement('div');
+                actions.className = 'inst-actions';
+
+                const actionsRow = document.createElement('div');
+                actionsRow.className = 'inst-actions-row';
+
+                const selectBtn = document.createElement('button');
+                selectBtn.className = 'btn-small btn-select';
+                selectBtn.type = 'button';
+                selectBtn.textContent = 'Seleccionar';
+                selectBtn.addEventListener('click', () => selectInstance(instanceId));
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'btn-small btn-delete';
+                deleteBtn.type = 'button';
+                deleteBtn.textContent = 'Borrar';
+                deleteBtn.addEventListener('click', () => deleteInstance(instanceId));
+
+                actionsRow.appendChild(selectBtn);
+                actionsRow.appendChild(deleteBtn);
+
+                const folderBtn = document.createElement('button');
+                folderBtn.className = 'btn-small btn-folder';
+                folderBtn.type = 'button';
+                folderBtn.setAttribute('aria-label', 'Abrir carpeta');
+                folderBtn.addEventListener('click', () => openInstanceFolder(instanceId));
+
+                const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+                svg.setAttribute('width', '14');
+                svg.setAttribute('height', '14');
+                svg.setAttribute('viewBox', '0 0 24 24');
+                svg.setAttribute('fill', 'currentColor');
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                path.setAttribute('d', 'M10 4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2h6z');
+                svg.appendChild(path);
+                folderBtn.appendChild(svg);
+
+                actions.appendChild(actionsRow);
+                actions.appendChild(folderBtn);
+
+                item.appendChild(info);
+                item.appendChild(actions);
                 container.appendChild(item);
             });
         }
@@ -2380,7 +2429,20 @@
         }
 
         function openExternal(url) {
-            if (api && api.send) api.send('open-external', url);
+            let safeUrl = null;
+            try {
+                const parsed = new URL(String(url || '').trim());
+                if (parsed.protocol === 'https:' || parsed.protocol === 'http:') {
+                    safeUrl = parsed.toString();
+                }
+            } catch {
+                safeUrl = null;
+            }
+            if (!safeUrl) {
+                showToast('URL invalida.', 'error');
+                return;
+            }
+            if (api && api.send) api.send('open-external', safeUrl);
         }
 
         function confirmDelete(ok) {
@@ -2481,10 +2543,16 @@
             if(type==='error') col='var(--error)';
             if(type==='success') col='var(--success)';
             t.style.borderLeftColor = col;
-            t.innerHTML = `<span style="color:${col}">•</span> ${msg}`;
+            const marker = document.createElement('span');
+            marker.style.color = col;
+            marker.textContent = '*';
+            t.appendChild(marker);
+            t.appendChild(document.createTextNode(` ${String(msg || '')}`));
             c.appendChild(t);
             setTimeout(() => { t.style.opacity = 0; setTimeout(()=>t.remove(), 300); }, 3000);
         }
     </script>
 </body>
 </html>
+
+
