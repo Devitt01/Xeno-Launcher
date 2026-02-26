@@ -737,7 +737,21 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '') 
       '} catch {}',
       'if($ok){',
       '  Start-Sleep -Milliseconds 250',
-      '  Start-Process -FilePath $exe | Out-Null',
+      '  $started=$false',
+      '  for($j=0;$j -lt 20;$j++){',
+      '    try {',
+      '      Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null',
+      '      $started=$true',
+      '      break',
+      '    } catch {',
+      '      Start-Sleep -Milliseconds 400',
+      '    }',
+      '  }',
+      '  if(-not $started){',
+      '    try {',
+      '      cmd /c "start \"\" \"$exe\"" | Out-Null',
+      '    } catch {}',
+      '  }',
       '}'
     ].join(';');
 
