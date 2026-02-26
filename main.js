@@ -75,6 +75,7 @@ const OPTIFINE_DOWNLOAD_BASE_URL = 'https://bmclapi2.bangbang93.com/optifine';
 const MODRINTH_API_BASE_URL = 'https://api.modrinth.com/v2';
 const MODRINTH_SODIUM_PROJECT_ID = 'AANobbMI';
 const HTTP_USER_AGENT = 'XenoLauncher/1.0';
+const MIN_SUPPORTED_VANILLA_VERSION = '1.8';
 const AUTHLIB_INJECTOR_META_URLS = [
   'https://authlib-injector.yushi.moe/artifact/latest.json',
   'https://bmclapi2.bangbang93.com/mirrors/authlib-injector/artifact/latest.json'
@@ -1426,6 +1427,22 @@ function isAtLeast(version, target) {
     if (ai < bi) return false;
   }
   return true;
+}
+
+function normalizeVanillaReleaseList(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const normalized = [];
+  for (const raw of list) {
+    const version = String(raw || '').trim();
+    if (!version) continue;
+    if (!/^\d+(\.\d+){1,2}$/.test(version)) continue;
+    if (!isAtLeast(version, MIN_SUPPORTED_VANILLA_VERSION)) continue;
+    if (seen.has(version)) continue;
+    seen.add(version);
+    normalized.push(version);
+  }
+  return normalized.sort(compareMcVersionsDesc);
 }
 
 function normalizeAddonSelection(addons) {
@@ -3166,9 +3183,10 @@ ipcMain.on('focus-debug', (event, data) => {
 ipcMain.on('get-vanilla-versions', async (event) => {
   try {
     const manifest = await fetchJson(MANIFEST_URL);
-    const releases = Array.isArray(manifest.versions)
+    const releasesRaw = Array.isArray(manifest.versions)
       ? manifest.versions.filter(v => v.type === 'release').map(v => v.id)
       : [];
+    const releases = normalizeVanillaReleaseList(releasesRaw);
 
     if (releases.length > 0) {
       store.set('vanillaVersions', releases);
@@ -3179,8 +3197,12 @@ ipcMain.on('get-vanilla-versions', async (event) => {
 
     event.reply('vanilla-versions-error', 'No hay versiones en el manifest.');
   } catch (err) {
-    const cached = store.get('vanillaVersions', []);
+    const cachedRaw = store.get('vanillaVersions', []);
+    const cached = normalizeVanillaReleaseList(cachedRaw);
     if (cached.length > 0) {
+      if (!Array.isArray(cachedRaw) || cached.join('|') !== cachedRaw.join('|')) {
+        store.set('vanillaVersions', cached);
+      }
       event.reply('vanilla-versions', cached);
       return;
     }
