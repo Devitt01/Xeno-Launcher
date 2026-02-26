@@ -47,6 +47,8 @@ const store = new Store({
     lastAppliedUpdateMarker: '',
     lastUpdateAttemptMarker: '',
     lastUpdateAttemptAt: 0,
+    lastUpdateAttemptPatchPath: '',
+    lastUpdateAttemptPatchSha1: '',
     forgeMcVersions: [],
     neoforgeMcVersions: [],
     fabricMcVersions: [],
@@ -499,6 +501,24 @@ function buildReleaseAssetsMarker(assets) {
   return crypto.createHash('sha1').update(raw).digest('hex');
 }
 
+function sha1File(filePath) {
+  try {
+    const full = path.resolve(String(filePath || '').trim());
+    if (!full || !fs.existsSync(full)) return '';
+    const data = fs.readFileSync(full);
+    return crypto.createHash('sha1').update(data).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
+function clearPendingUpdateAttempt() {
+  store.set('lastUpdateAttemptMarker', '');
+  store.set('lastUpdateAttemptAt', 0);
+  store.set('lastUpdateAttemptPatchPath', '');
+  store.set('lastUpdateAttemptPatchSha1', '');
+}
+
 function isReleaseApproved(payload) {
   if (!UPDATE_APPROVAL_TOKEN) return true;
   const token = UPDATE_APPROVAL_TOKEN.toLowerCase();
@@ -869,7 +889,23 @@ function consumeAsarUpdateStatus() {
   try {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     const statusPath = path.join(updatesDir, 'asar-update-status.json');
-    if (!fs.existsSync(statusPath)) return;
+    const attemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
+    const attemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
+    const attemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
+
+    if (!fs.existsSync(statusPath)) {
+      if (attemptMarker && attemptPatchSha1) {
+        const currentAsarPath = getCurrentAppAsarPath();
+        const currentAsarSha1 = sha1File(currentAsarPath).toLowerCase();
+        const patchSha1 = attemptPatchSha1 || sha1File(attemptPatchPath).toLowerCase();
+        if (currentAsarSha1 && patchSha1 && currentAsarSha1 === patchSha1) {
+          store.set('lastAppliedUpdateMarker', attemptMarker);
+          clearPendingUpdateAttempt();
+          appendFocusLog(`UPDATE ASAR fallback confirmed marker by hash: ${attemptMarker}`);
+        }
+      }
+      return;
+    }
 
     let payload = null;
     try {
@@ -888,8 +924,7 @@ function consumeAsarUpdateStatus() {
       const marker = String(payload.marker).trim();
       if (marker) {
         store.set('lastAppliedUpdateMarker', marker);
-        store.set('lastUpdateAttemptMarker', '');
-        store.set('lastUpdateAttemptAt', 0);
+        clearPendingUpdateAttempt();
         appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker} elevated=${payload.elevated === true ? 'yes' : 'no'}`);
       }
     } else {
@@ -1035,13 +1070,14 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const appliedMarker = String(store.get('lastAppliedUpdateMarker', '') || '').trim();
   const lastAttemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
   const lastAttemptAt = Number(store.get('lastUpdateAttemptAt', 0)) || 0;
+  const lastAttemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
+  const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim();
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
 
   if (!hasVersionUpdate && !hasMarkerUpdate) {
     appendFocusLog(`UPDATE Up to date (${current})`);
-    if (lastAttemptMarker) {
-      store.set('lastUpdateAttemptMarker', '');
-      store.set('lastUpdateAttemptAt', 0);
+    if (lastAttemptMarker || lastAttemptPatchPath || lastAttemptPatchSha1) {
+      clearPendingUpdateAttempt();
     }
     send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { upToDate: true };
@@ -1192,6 +1228,19 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       return { updateAvailable: true, failed: true, error: String(err) };
     }
 
+    const patchSha1 = sha1File(patchPath);
+    if (!patchSha1) {
+      appendFocusLog(`UPDATE ASAR hash failed: ${patchPath}`);
+      send({
+        text: 'No se pudo validar hash del parche del launcher. Continuando...',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, failed: true, error: 'No se pudo calcular hash del parche ASAR.' };
+    }
+
     send({
       text: asarNeedsElevation
         ? 'Aplicando parche del launcher (se pediran permisos de administrador)...'
@@ -1221,6 +1270,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     if (latestMarker) {
       store.set('lastUpdateAttemptMarker', latestMarker);
       store.set('lastUpdateAttemptAt', Date.now());
+      store.set('lastUpdateAttemptPatchPath', patchPath);
+      store.set('lastUpdateAttemptPatchSha1', patchSha1);
     }
     appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'}`);
     send({
@@ -1422,6 +1473,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   if (latestMarker) {
     store.set('lastUpdateAttemptMarker', latestMarker);
     store.set('lastUpdateAttemptAt', Date.now());
+    store.set('lastUpdateAttemptPatchPath', '');
+    store.set('lastUpdateAttemptPatchSha1', '');
   }
   send({
     text: winUpdateMode === 'portable'
