@@ -14,6 +14,25 @@ function formatSize(bytes) {
   return `${mb.toFixed(2)} MB`;
 }
 
+function newestSourceMtime(rootDir) {
+  const importantFiles = [
+    'main.js',
+    'index.html',
+    'preload.js',
+    'splash.html',
+    'skin-server.js',
+    'package.json'
+  ];
+  let newest = 0;
+  for (const rel of importantFiles) {
+    const full = path.join(rootDir, rel);
+    if (!fs.existsSync(full)) continue;
+    const mtime = fs.statSync(full).mtimeMs;
+    if (mtime > newest) newest = mtime;
+  }
+  return newest;
+}
+
 function main() {
   const rootDir = process.cwd();
   const version = readPackageVersion(rootDir);
@@ -21,6 +40,12 @@ function main() {
 
   if (!fs.existsSync(sourceAsar)) {
     throw new Error(`No existe el archivo fuente: ${sourceAsar}`);
+  }
+
+  const asarMtime = fs.statSync(sourceAsar).mtimeMs;
+  const srcMtime = newestSourceMtime(rootDir);
+  if (srcMtime > asarMtime + 1000) {
+    throw new Error('El app.asar esta desactualizado. Ejecuta primero: npm run build:win');
   }
 
   const targetAsar = path.join(rootDir, 'dist', `XenoLauncher-App-${version}.asar`);
