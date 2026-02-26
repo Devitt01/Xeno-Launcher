@@ -724,8 +724,9 @@ function getCurrentAppAsarPath() {
   }
 }
 
-function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, elevated }) {
+function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, elevated, launcherPid }) {
   const elevatedLiteral = elevated ? '$true' : '$false';
+  const launcherPidValue = Number.isFinite(Number(launcherPid)) ? Math.max(0, Math.trunc(Number(launcherPid))) : 0;
   return [
     `$src=${psQuote(src)}`,
     `$dst=${psQuote(dst)}`,
@@ -734,6 +735,7 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     `$status=${psQuote(statusPath)}`,
     `$marker=${psQuote(String(marker || ''))}`,
     `$elevated=${elevatedLiteral}`,
+    `$launcherPid=${launcherPidValue}`,
     '$ok=$false',
     '$errorMessage=""',
     'for($i=0;$i -lt 120;$i++){',
@@ -755,16 +757,37 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; error = [string]$errorMessage; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
     '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
     '} catch {}',
+    'if($launcherPid -gt 0){',
+    '  for($k=0;$k -lt 240;$k++){',
+    '    try {',
+    '      $proc = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue',
+    '    } catch {',
+    '      $proc = $null',
+    '    }',
+    '    if(-not $proc){ break }',
+    '    Start-Sleep -Milliseconds 250',
+    '  }',
+    '}',
     'Start-Sleep -Milliseconds 250',
     '$started=$false',
-    'for($j=0;$j -lt 20;$j++){',
+    'for($j=0;$j -lt 40;$j++){',
     '  try {',
-    '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null',
-    '    $started=$true',
-    '    break',
+    '    $newProc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -PassThru -ErrorAction Stop',
+    '    Start-Sleep -Milliseconds 350',
+    '    $alive = $true',
+    '    try {',
+    '      if($newProc -and $newProc.HasExited){ $alive = $false }',
+    '    } catch {',
+    '      $alive = $true',
+    '    }',
+    '    if($alive){',
+    '      $started=$true',
+    '      break',
+    '    }',
     '  } catch {',
     '    Start-Sleep -Milliseconds 400',
     '  }',
+    '  Start-Sleep -Milliseconds 300',
     '}'
   ].join(';');
 }
@@ -776,6 +799,7 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
     const exe = path.resolve(app.getPath('exe'));
     const statusPath = path.resolve(String(statusFilePath || '').trim());
     const elevate = !!(options && options.elevate === true);
+    const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
     if (!src || !dst || !exe || !statusPath || src.toLowerCase() === dst.toLowerCase()) return false;
     const backup = `${dst}.bak`;
     const applyScript = buildAsarApplyScript({
@@ -785,7 +809,8 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
       exe,
       statusPath,
       marker,
-      elevated: elevate
+      elevated: elevate,
+      launcherPid
     });
 
     if (!elevate) {
@@ -1178,7 +1203,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     });
 
     const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker, {
-      elevate: asarNeedsElevation
+      elevate: asarNeedsElevation,
+      launcherPid: process.pid
     });
     if (!launched) {
       appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
@@ -3218,7 +3244,13 @@ app.whenReady().then(() => {
         const update = await checkAndInstallLauncherUpdate(sendSplashStatus);
         if (update && update.installing) {
           quittingForUpdate = true;
-          setTimeout(() => app.quit(), 300);
+          setTimeout(() => {
+            try {
+              app.exit(0);
+            } catch {
+              app.quit();
+            }
+          }, 300);
           return;
         }
       } catch (err) {
