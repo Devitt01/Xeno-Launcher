@@ -611,10 +611,29 @@ function getWindowsUpdateMode() {
 }
 
 function hasDirectoryWriteAccess(dirPath) {
+  const targetDir = String(dirPath || '').trim();
+  if (!targetDir) return false;
   try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
+    fs.accessSync(targetDir, fs.constants.W_OK);
+  } catch {
+    return false;
+  }
+
+  // Windows puede reportar W_OK aunque luego falle la escritura real (EPERM).
+  // Verificamos creando y borrando un archivo temporal.
+  const probeName = `.xeno-write-probe-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`;
+  const probePath = path.join(targetDir, probeName);
+  try {
+    const fd = fs.openSync(probePath, 'wx');
+    fs.closeSync(fd);
+    fs.unlinkSync(probePath);
     return true;
   } catch {
+    try {
+      if (fs.existsSync(probePath)) fs.unlinkSync(probePath);
+    } catch {
+      // ignore
+    }
     return false;
   }
 }
