@@ -45,6 +45,8 @@ const store = new Store({
     profile: null,
     elyClientToken: '',
     lastAppliedUpdateMarker: '',
+    lastUpdateAttemptMarker: '',
+    lastUpdateAttemptAt: 0,
     forgeMcVersions: [],
     neoforgeMcVersions: [],
     fabricMcVersions: [],
@@ -776,9 +778,12 @@ function consumeAsarUpdateStatus() {
       const marker = String(payload.marker).trim();
       if (marker) {
         store.set('lastAppliedUpdateMarker', marker);
+        store.set('lastUpdateAttemptMarker', '');
+        store.set('lastUpdateAttemptAt', 0);
         appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker}`);
       }
     } else {
+      store.set('lastUpdateAttemptAt', Date.now());
       appendFocusLog('UPDATE ASAR status indicates failure');
     }
   } catch {
@@ -913,12 +918,35 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const hasVersionUpdate = compareAppVersions(latestVersion, current) > 0;
   const latestMarker = String(latest.marker || '').trim();
   const appliedMarker = String(store.get('lastAppliedUpdateMarker', '') || '').trim();
+  const lastAttemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
+  const lastAttemptAt = Number(store.get('lastUpdateAttemptAt', 0)) || 0;
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
 
   if (!hasVersionUpdate && !hasMarkerUpdate) {
     appendFocusLog(`UPDATE Up to date (${current})`);
+    if (lastAttemptMarker) {
+      store.set('lastUpdateAttemptMarker', '');
+      store.set('lastUpdateAttemptAt', 0);
+    }
     send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { upToDate: true };
+  }
+
+  if (
+    hasMarkerUpdate &&
+    latestMarker &&
+    lastAttemptMarker === latestMarker &&
+    Date.now() - lastAttemptAt < 5 * 60 * 1000
+  ) {
+    appendFocusLog(`UPDATE Recent attempt detected for marker ${latestMarker}; skipping to avoid restart loop`);
+    send({
+      text: 'Parche ya intentado hace un momento. Continuando launcher...',
+      phase: 'up-to-date',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { skipped: true, reason: 'recent_attempt' };
   }
 
   if (hasVersionUpdate) {
@@ -1068,6 +1096,10 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       return { updateAvailable: true, failed: true, error: 'No se pudo iniciar actualizacion ASAR.' };
     }
 
+    if (latestMarker) {
+      store.set('lastUpdateAttemptMarker', latestMarker);
+      store.set('lastUpdateAttemptAt', Date.now());
+    }
     appendFocusLog(`UPDATE ASAR updater launched: ${patchPath}`);
     send({
       text: 'Parche aplicado. Reiniciando launcher...',
