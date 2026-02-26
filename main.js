@@ -765,11 +765,6 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '  } catch {',
     '    Start-Sleep -Milliseconds 400',
     '  }',
-    '}',
-    'if(-not $started){',
-    '  try {',
-    '    cmd /c "start \"\" \"$exe\"" | Out-Null',
-    '  } catch {}',
     '}'
   ].join(';');
 }
