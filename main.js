@@ -773,10 +773,6 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     'if(-not $ok -and (Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){',
     '  try { Move-Item -LiteralPath $bak -Destination $dst -Force } catch {}',
     '}',
-    'try {',
-    '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; error = [string]$errorMessage; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
-    '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
-    '} catch {}',
     'if($launcherPid -gt 0){',
     '  for($k=0;$k -lt 240;$k++){',
     '    try {',
@@ -790,6 +786,7 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '}',
     'Start-Sleep -Milliseconds 250',
     '$started=$false',
+    '$startError=""',
     'for($j=0;$j -lt 40;$j++){',
     '  try {',
     '    $newProc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -PassThru -ErrorAction Stop',
@@ -804,11 +801,33 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '      $started=$true',
     '      break',
     '    }',
+    '    if(-not $startError){ $startError = "Launcher process exited immediately." }',
     '  } catch {',
+    '    $startError = [string]$_.Exception.Message',
     '    Start-Sleep -Milliseconds 400',
     '  }',
     '  Start-Sleep -Milliseconds 300',
-    '}'
+    '}',
+    'if(-not $started){',
+    '  try {',
+    '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ErrorAction Stop | Out-Null',
+    '    $started=$true',
+    '  } catch {',
+    '    $startError = [string]$_.Exception.Message',
+    '  }',
+    '}',
+    'if(-not $started){',
+    '  try {',
+    '    cmd /c start "" "$exe" | Out-Null',
+    '    $started=$true',
+    '  } catch {',
+    '    if(-not $startError){ $startError = [string]$_.Exception.Message }',
+    '  }',
+    '}',
+    'try {',
+    '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; restarted = $started; error = [string]$errorMessage; restartError = [string]$startError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+    '} catch {}'
   ].join(';');
 }
 
@@ -885,6 +904,23 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
   }
 }
 
+function confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, logPrefix = 'UPDATE ASAR fallback') {
+  const marker = String(attemptMarker || '').trim();
+  const patchSha1Value = String(attemptPatchSha1 || '').trim().toLowerCase();
+  const patchPathValue = String(attemptPatchPath || '').trim();
+  if (!marker) return false;
+
+  const currentAsarPath = getCurrentAppAsarPath();
+  const currentAsarSha1 = sha1File(currentAsarPath).toLowerCase();
+  const patchSha1 = (patchSha1Value || sha1File(patchPathValue)).toLowerCase();
+  if (!currentAsarSha1 || !patchSha1 || currentAsarSha1 !== patchSha1) return false;
+
+  store.set('lastAppliedUpdateMarker', marker);
+  clearPendingUpdateAttempt();
+  appendFocusLog(`${logPrefix} confirmed marker by hash: ${marker}`);
+  return true;
+}
+
 function consumeAsarUpdateStatus() {
   try {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
@@ -894,22 +930,14 @@ function consumeAsarUpdateStatus() {
     const attemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
 
     if (!fs.existsSync(statusPath)) {
-      if (attemptMarker && attemptPatchSha1) {
-        const currentAsarPath = getCurrentAppAsarPath();
-        const currentAsarSha1 = sha1File(currentAsarPath).toLowerCase();
-        const patchSha1 = attemptPatchSha1 || sha1File(attemptPatchPath).toLowerCase();
-        if (currentAsarSha1 && patchSha1 && currentAsarSha1 === patchSha1) {
-          store.set('lastAppliedUpdateMarker', attemptMarker);
-          clearPendingUpdateAttempt();
-          appendFocusLog(`UPDATE ASAR fallback confirmed marker by hash: ${attemptMarker}`);
-        }
-      }
+      confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR fallback');
       return;
     }
 
     let payload = null;
     try {
-      payload = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+      const raw = fs.readFileSync(statusPath, 'utf8').replace(/^\uFEFF/, '');
+      payload = JSON.parse(raw);
     } catch {
       payload = null;
     }
@@ -928,8 +956,11 @@ function consumeAsarUpdateStatus() {
         appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker} elevated=${payload.elevated === true ? 'yes' : 'no'}`);
       }
     } else {
+      if (confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR status fallback')) return;
       store.set('lastUpdateAttemptAt', Date.now());
-      const reason = payload && payload.error ? String(payload.error) : '';
+      const reason = payload && (payload.error || payload.restartError)
+        ? String(payload.error || payload.restartError)
+        : '';
       if (reason) {
         appendFocusLog(`UPDATE ASAR status indicates failure: ${reason}`);
       } else {
@@ -1071,7 +1102,13 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const lastAttemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
   const lastAttemptAt = Number(store.get('lastUpdateAttemptAt', 0)) || 0;
   const lastAttemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
-  const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim();
+  const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
+  const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+  const hasAttemptHashMismatch = !!(
+    lastAttemptPatchSha1 &&
+    currentAsarSha1 &&
+    lastAttemptPatchSha1 !== currentAsarSha1
+  );
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
 
   if (!hasVersionUpdate && !hasMarkerUpdate) {
@@ -1087,7 +1124,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     hasMarkerUpdate &&
     latestMarker &&
     lastAttemptMarker === latestMarker &&
-    Date.now() - lastAttemptAt < 5 * 60 * 1000
+    Date.now() - lastAttemptAt < 5 * 60 * 1000 &&
+    !hasAttemptHashMismatch
   ) {
     appendFocusLog(`UPDATE Recent attempt detected for marker ${latestMarker}; skipping to avoid restart loop`);
     send({
@@ -1098,6 +1136,9 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       indeterminate: false
     });
     return { skipped: true, reason: 'recent_attempt' };
+  }
+  if (hasMarkerUpdate && latestMarker && lastAttemptMarker === latestMarker && hasAttemptHashMismatch) {
+    appendFocusLog(`UPDATE Retry enabled for marker ${latestMarker}: detected ASAR hash mismatch`);
   }
 
   if (hasVersionUpdate) {
@@ -1146,7 +1187,18 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const asarAsset = selectAsarUpdateAsset(latest.assets);
   const currentAsarPath = getCurrentAppAsarPath();
   const canWriteAsar = !!currentAsarPath && hasDirectoryWriteAccess(path.dirname(currentAsarPath));
-  const asarNeedsElevation = !!currentAsarPath && !canWriteAsar;
+  const isRetrySameMarker = !!(
+    hasMarkerUpdate &&
+    latestMarker &&
+    lastAttemptMarker &&
+    lastAttemptMarker === latestMarker &&
+    hasAttemptHashMismatch
+  );
+  const shouldForceElevationRetry = !!(
+    isRetrySameMarker &&
+    UPDATE_ALLOW_ASAR_ELEVATION
+  );
+  const asarNeedsElevation = !!currentAsarPath && (!canWriteAsar || shouldForceElevationRetry);
   const canPatchAsar = !!asarAsset && !!currentAsarPath && (canWriteAsar || UPDATE_ALLOW_ASAR_ELEVATION);
   if (canPatchAsar) {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
@@ -1157,88 +1209,116 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       .update(`${asarAsset.name}|${asarAsset.url}|${latestMarker || latestVersion || 'patch'}`)
       .digest('hex')
       .slice(0, 12);
-    const patchRunId = `${patchToken}-${Date.now()}-${process.pid}`;
-    const patchPath = path.join(updatesDir, `xeno-launcher-patch-${patchRunId}.bin`);
+    let patchPath = '';
+    let patchSha1 = '';
+    const canReusePreviousPatch = !!(
+      isRetrySameMarker &&
+      lastAttemptPatchPath &&
+      fs.existsSync(lastAttemptPatchPath) &&
+      lastAttemptPatchSha1
+    );
+    if (canReusePreviousPatch) {
+      const reuseSha1 = sha1File(lastAttemptPatchPath).toLowerCase();
+      if (reuseSha1 && reuseSha1 === lastAttemptPatchSha1) {
+        patchPath = lastAttemptPatchPath;
+        patchSha1 = reuseSha1;
+        appendFocusLog(`UPDATE Reusing previous ASAR patch for marker ${latestMarker}: ${patchPath}`);
+      }
+    }
+    if (!patchPath) {
+      const patchRunId = `${patchToken}-${Date.now()}-${process.pid}`;
+      patchPath = path.join(updatesDir, `xeno-launcher-patch-${patchRunId}.bin`);
+    }
     appendFocusLog(`UPDATE Asset selected (asar): ${asarAsset.name}`);
     try {
-      if (fs.existsSync(patchPath)) fs.unlinkSync(patchPath);
       if (fs.existsSync(statusPath)) fs.unlinkSync(statusPath);
+      if (!patchSha1 && fs.existsSync(patchPath)) fs.unlinkSync(patchPath);
     } catch {
       // ignore
     }
 
-    let lastPercent = -1;
-    send({
-      text: 'Descargando parche del launcher... 0%',
-      phase: 'downloading',
-      progress: 0,
-      indeterminate: false,
-      showProgress: true
-    });
-
-    const downloadPromise = downloadFile(asarAsset.url, patchPath, (ratio) => {
-      const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
-      if (pct === lastPercent) return;
-      if (pct < 100 && pct - lastPercent < 2) return;
-      lastPercent = pct;
+    if (!patchSha1) {
+      let lastPercent = -1;
       send({
-        text: `Descargando parche del launcher... ${pct}%`,
+        text: 'Descargando parche del launcher... 0%',
         phase: 'downloading',
-        progress: pct,
+        progress: 0,
         indeterminate: false,
         showProgress: true
       });
-    });
-
-    try {
-      await Promise.race([
-        downloadPromise,
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error('Timeout de descarga.')), UPDATE_DOWNLOAD_TIMEOUT_MS);
-        })
-      ]);
-      appendFocusLog(`UPDATE ASAR downloaded: ${patchPath}`);
-    } catch (err) {
-      appendFocusLog(`UPDATE ASAR download failed: ${String(err)}`);
-      send({
-        text: 'Fallo la descarga del parche del launcher. Continuando...',
-        phase: 'error',
-        showProgress: false,
-        progress: null,
-        indeterminate: false
+  
+      const downloadPromise = downloadFile(asarAsset.url, patchPath, (ratio) => {
+        const pct = Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)));
+        if (pct === lastPercent) return;
+        if (pct < 100 && pct - lastPercent < 2) return;
+        lastPercent = pct;
+        send({
+          text: `Descargando parche del launcher... ${pct}%`,
+          phase: 'downloading',
+          progress: pct,
+          indeterminate: false,
+          showProgress: true
+        });
       });
-      return { updateAvailable: true, failed: true, error: String(err) };
-    }
-
-    try {
-      const stat = fs.statSync(patchPath);
-      const assetExt = path.extname(String(asarAsset.name || '')).toLowerCase();
-      if (assetExt !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
-        throw new Error('Parche ASAR invalido.');
+  
+      try {
+        await Promise.race([
+          downloadPromise,
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Timeout de descarga.')), UPDATE_DOWNLOAD_TIMEOUT_MS);
+          })
+        ]);
+        appendFocusLog(`UPDATE ASAR downloaded: ${patchPath}`);
+      } catch (err) {
+        appendFocusLog(`UPDATE ASAR download failed: ${String(err)}`);
+        send({
+          text: 'Fallo la descarga del parche del launcher. Continuando...',
+          phase: 'error',
+          showProgress: false,
+          progress: null,
+          indeterminate: false
+        });
+        return { updateAvailable: true, failed: true, error: String(err) };
       }
-    } catch (err) {
-      appendFocusLog(`UPDATE ASAR validation failed: ${String(err)}`);
+  
+      try {
+        const stat = fs.statSync(patchPath);
+        const assetExt = path.extname(String(asarAsset.name || '')).toLowerCase();
+        if (assetExt !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
+          throw new Error('Parche ASAR invalido.');
+        }
+      } catch (err) {
+        appendFocusLog(`UPDATE ASAR validation failed: ${String(err)}`);
+        send({
+          text: 'El parche del launcher no es valido. Continuando...',
+          phase: 'error',
+          showProgress: false,
+          progress: null,
+          indeterminate: false
+        });
+        return { updateAvailable: true, failed: true, error: String(err) };
+      }
+  
+      patchSha1 = sha1File(patchPath);
+      if (!patchSha1) {
+        appendFocusLog(`UPDATE ASAR hash failed: ${patchPath}`);
+        send({
+          text: 'No se pudo validar hash del parche del launcher. Continuando...',
+          phase: 'error',
+          showProgress: false,
+          progress: null,
+          indeterminate: false
+        });
+        return { updateAvailable: true, failed: true, error: 'No se pudo calcular hash del parche ASAR.' };
+      }
+    } else {
       send({
-        text: 'El parche del launcher no es valido. Continuando...',
-        phase: 'error',
-        showProgress: false,
-        progress: null,
-        indeterminate: false
+        text: 'Reintentando aplicar parche del launcher...',
+        phase: 'installing',
+        progress: 100,
+        indeterminate: true,
+        showProgress: true
       });
-      return { updateAvailable: true, failed: true, error: String(err) };
-    }
-
-    const patchSha1 = sha1File(patchPath);
-    if (!patchSha1) {
-      appendFocusLog(`UPDATE ASAR hash failed: ${patchPath}`);
-      send({
-        text: 'No se pudo validar hash del parche del launcher. Continuando...',
-        phase: 'error',
-        showProgress: false,
-        progress: null,
-        indeterminate: false
-      });
-      return { updateAvailable: true, failed: true, error: 'No se pudo calcular hash del parche ASAR.' };
     }
 
     send({
@@ -1273,7 +1353,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       store.set('lastUpdateAttemptPatchPath', patchPath);
       store.set('lastUpdateAttemptPatchSha1', patchSha1);
     }
-    appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'}`);
+    appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
     send({
       text: asarNeedsElevation
         ? 'Parche descargado. Esperando permisos y reinicio del launcher...'
