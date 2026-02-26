@@ -11,7 +11,7 @@
     "build:win": "electron-builder --win nsis --publish never",
     "build:win:clean": "npm run clean:dist && electron-builder --win nsis --publish never",
     "build:portable": "npm run clean:dist && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe",
-    "build:release:win": "npm run clean:dist && electron-builder --win nsis --publish never && npm run build:asar-asset && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe"
+    "build:release:win": "set \"XENO_BUILD_OUTPUT_DIR=dist-release\" && electron-builder --win nsis --publish never --config.directories.output=dist-release && npm run build:asar-asset && electron-builder --win portable --publish never --config.directories.output=dist-release --config.win.artifactName=XenoLauncher-Portable-${version}.exe"
   },
   "author": "Devitt",
   "license": "ISC",

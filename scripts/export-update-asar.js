@@ -9,6 +9,11 @@ function readPackageVersion(rootDir) {
   return version;
 }
 
+function resolveOutputDir(rootDir) {
+  const raw = String(process.env.XENO_BUILD_OUTPUT_DIR || 'dist').trim() || 'dist';
+  return path.isAbsolute(raw) ? raw : path.join(rootDir, raw);
+}
+
 function formatSize(bytes) {
   const mb = bytes / (1024 * 1024);
   return `${mb.toFixed(2)} MB`;
@@ -36,7 +41,8 @@ function newestSourceMtime(rootDir) {
 function main() {
   const rootDir = process.cwd();
   const version = readPackageVersion(rootDir);
-  const sourceAsar = path.join(rootDir, 'dist', 'win-unpacked', 'resources', 'app.asar');
+  const outputDir = resolveOutputDir(rootDir);
+  const sourceAsar = path.join(outputDir, 'win-unpacked', 'resources', 'app.asar');
 
   if (!fs.existsSync(sourceAsar)) {
     throw new Error(`No existe el archivo fuente: ${sourceAsar}`);
@@ -48,10 +54,11 @@ function main() {
     throw new Error('El app.asar esta desactualizado. Ejecuta primero: npm run build:win');
   }
 
-  const targetAsar = path.join(rootDir, 'dist', `XenoLauncher-App-${version}.asar`);
+  const targetAsar = path.join(outputDir, `XenoLauncher-App-${version}.asar`);
   fs.copyFileSync(sourceAsar, targetAsar);
 
   const stats = fs.statSync(targetAsar);
+  console.log(`[build:asar-asset] Output: ${outputDir}`);
   console.log(`[build:asar-asset] Archivo creado: ${targetAsar}`);
   console.log(`[build:asar-asset] Tamano: ${formatSize(stats.size)}`);
 }

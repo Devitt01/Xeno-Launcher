@@ -115,6 +115,7 @@ const UPDATE_REQUIRE_APPROVAL = !/^(0|false|no)$/i.test(String(process.env.XENO_
 const UPDATE_ALLOW_UNAPPROVED = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_UNAPPROVED || '').trim());
 const UPDATE_APPROVAL_TOKEN = String(process.env.XENO_UPDATE_APPROVAL_TOKEN || 'XENO_PUBLIC_UPDATE').trim();
 const UPDATE_ALLOW_BINARY_FALLBACK = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_BINARY_FALLBACK || '').trim());
+const UPDATE_ALLOW_ASAR_ELEVATION = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_ALLOW_ASAR_ELEVATION || 'true').trim());
 const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
 
@@ -670,6 +671,10 @@ function psQuote(value) {
   return `'${String(value || '').replace(/'/g, "''")}'`;
 }
 
+function psEncode(script) {
+  return Buffer.from(String(script || ''), 'utf16le').toString('base64');
+}
+
 function launchPortableSelfUpdater(downloadedExePath) {
   try {
     const src = path.resolve(String(downloadedExePath || '').trim());
@@ -719,58 +724,110 @@ function getCurrentAppAsarPath() {
   }
 }
 
-function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '') {
+function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, elevated }) {
+  const elevatedLiteral = elevated ? '$true' : '$false';
+  return [
+    `$src=${psQuote(src)}`,
+    `$dst=${psQuote(dst)}`,
+    `$bak=${psQuote(backup)}`,
+    `$exe=${psQuote(exe)}`,
+    `$status=${psQuote(statusPath)}`,
+    `$marker=${psQuote(String(marker || ''))}`,
+    `$elevated=${elevatedLiteral}`,
+    '$ok=$false',
+    '$errorMessage=""',
+    'for($i=0;$i -lt 120;$i++){',
+    '  try {',
+    '    if(Test-Path -LiteralPath $bak){ Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }',
+    '    if(Test-Path -LiteralPath $dst){ Move-Item -LiteralPath $dst -Destination $bak -Force }',
+    '    Copy-Item -LiteralPath $src -Destination $dst -Force',
+    '    $ok=$true',
+    '    break',
+    '  } catch {',
+    '    $errorMessage = [string]$_.Exception.Message',
+    '    Start-Sleep -Milliseconds 500',
+    '  }',
+    '}',
+    'if(-not $ok -and (Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){',
+    '  try { Move-Item -LiteralPath $bak -Destination $dst -Force } catch {}',
+    '}',
+    'try {',
+    '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; error = [string]$errorMessage; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+    '} catch {}',
+    'Start-Sleep -Milliseconds 250',
+    '$started=$false',
+    'for($j=0;$j -lt 20;$j++){',
+    '  try {',
+    '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null',
+    '    $started=$true',
+    '    break',
+    '  } catch {',
+    '    Start-Sleep -Milliseconds 400',
+    '  }',
+    '}',
+    'if(-not $started){',
+    '  try {',
+    '    cmd /c "start \"\" \"$exe\"" | Out-Null',
+    '  } catch {}',
+    '}'
+  ].join(';');
+}
+
+function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', options = {}) {
   try {
     const src = path.resolve(String(downloadedAsarPath || '').trim());
     const dst = path.resolve(getCurrentAppAsarPath());
     const exe = path.resolve(app.getPath('exe'));
     const statusPath = path.resolve(String(statusFilePath || '').trim());
+    const elevate = !!(options && options.elevate === true);
     if (!src || !dst || !exe || !statusPath || src.toLowerCase() === dst.toLowerCase()) return false;
     const backup = `${dst}.bak`;
+    const applyScript = buildAsarApplyScript({
+      src,
+      dst,
+      backup,
+      exe,
+      statusPath,
+      marker,
+      elevated: elevate
+    });
 
-    const script = [
-      `$src=${psQuote(src)}`,
-      `$dst=${psQuote(dst)}`,
-      `$bak=${psQuote(backup)}`,
-      `$exe=${psQuote(exe)}`,
+    if (!elevate) {
+      return spawnDetached('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-WindowStyle',
+        'Hidden',
+        '-Command',
+        applyScript
+      ]);
+    }
+
+    const encodedApplyScript = psEncode(applyScript);
+    const bootstrapScript = [
       `$status=${psQuote(statusPath)}`,
       `$marker=${psQuote(String(marker || ''))}`,
-      '$ok=$false',
-      'for($i=0;$i -lt 120;$i++){',
-      '  try {',
-      '    if(Test-Path -LiteralPath $bak){ Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }',
-      '    if(Test-Path -LiteralPath $dst){ Move-Item -LiteralPath $dst -Destination $bak -Force }',
-      '    Copy-Item -LiteralPath $src -Destination $dst -Force',
-      '    $ok=$true',
-      '    break',
-      '  } catch {',
-      '    Start-Sleep -Milliseconds 500',
-      '  }',
-      '}',
-      'if(-not $ok -and (Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){',
-      '  Move-Item -LiteralPath $bak -Destination $dst -Force',
-      '}',
+      `$exe=${psQuote(exe)}`,
+      `$encoded=${psQuote(encodedApplyScript)}`,
+      '$launched=$false',
+      '$launchError=""',
       'try {',
-      '  $payload = @{ ok = $ok; marker = $marker; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
-      '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
-      '} catch {}',
-      'if($ok){',
-      '  Start-Sleep -Milliseconds 250',
-      '  $started=$false',
-      '  for($j=0;$j -lt 20;$j++){',
-      '    try {',
-      '      Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null',
-      '      $started=$true',
-      '      break',
-      '    } catch {',
-      '      Start-Sleep -Milliseconds 400',
-      '    }',
-      '  }',
-      '  if(-not $started){',
-      '    try {',
-      '      cmd /c "start \"\" \"$exe\"" | Out-Null',
-      '    } catch {}',
-      '  }',
+      '  $args = @("-NoProfile","-ExecutionPolicy","Bypass","-EncodedCommand",$encoded)',
+      '  Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs | Out-Null',
+      '  $launched=$true',
+      '} catch {',
+      '  $launchError = [string]$_.Exception.Message',
+      '}',
+      'if(-not $launched){',
+      '  try {',
+      '    $payload = @{ ok = $false; marker = $marker; elevated = $true; launchFailed = $true; error = [string]$launchError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+      '    Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+      '  } catch {}',
+      '  try {',
+      '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null',
+      '  } catch {}',
       '}'
     ].join(';');
 
@@ -781,7 +838,7 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '') 
       '-WindowStyle',
       'Hidden',
       '-Command',
-      script
+      bootstrapScript
     ]);
   } catch {
     return false;
@@ -813,11 +870,16 @@ function consumeAsarUpdateStatus() {
         store.set('lastAppliedUpdateMarker', marker);
         store.set('lastUpdateAttemptMarker', '');
         store.set('lastUpdateAttemptAt', 0);
-        appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker}`);
+        appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker} elevated=${payload.elevated === true ? 'yes' : 'no'}`);
       }
     } else {
       store.set('lastUpdateAttemptAt', Date.now());
-      appendFocusLog('UPDATE ASAR status indicates failure');
+      const reason = payload && payload.error ? String(payload.error) : '';
+      if (reason) {
+        appendFocusLog(`UPDATE ASAR status indicates failure: ${reason}`);
+      } else {
+        appendFocusLog('UPDATE ASAR status indicates failure');
+      }
     }
   } catch {
     // ignore
@@ -1028,7 +1090,9 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const asarAsset = selectAsarUpdateAsset(latest.assets);
   const currentAsarPath = getCurrentAppAsarPath();
   const canWriteAsar = !!currentAsarPath && hasDirectoryWriteAccess(path.dirname(currentAsarPath));
-  if (asarAsset && canWriteAsar) {
+  const asarNeedsElevation = !!currentAsarPath && !canWriteAsar;
+  const canPatchAsar = !!asarAsset && !!currentAsarPath && (canWriteAsar || UPDATE_ALLOW_ASAR_ELEVATION);
+  if (canPatchAsar) {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     ensureDir(updatesDir);
     const statusPath = path.join(updatesDir, 'asar-update-status.json');
@@ -1109,14 +1173,18 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     }
 
     send({
-      text: 'Aplicando parche del launcher...',
+      text: asarNeedsElevation
+        ? 'Aplicando parche del launcher (se pediran permisos de administrador)...'
+        : 'Aplicando parche del launcher...',
       phase: 'installing',
       progress: 100,
       indeterminate: true,
       showProgress: true
     });
 
-    const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker);
+    const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker, {
+      elevate: asarNeedsElevation
+    });
     if (!launched) {
       appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
       send({
@@ -1133,22 +1201,26 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       store.set('lastUpdateAttemptMarker', latestMarker);
       store.set('lastUpdateAttemptAt', Date.now());
     }
-    appendFocusLog(`UPDATE ASAR updater launched: ${patchPath}`);
+    appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'}`);
     send({
-      text: 'Parche aplicado. Reiniciando launcher...',
+      text: asarNeedsElevation
+        ? 'Parche descargado. Esperando permisos y reinicio del launcher...'
+        : 'Parche aplicado. Reiniciando launcher...',
       phase: 'installing',
       progress: 100,
       indeterminate: true,
       showProgress: true
     });
-    return { installing: true, version: latestVersion, mode: 'asar' };
+    return { installing: true, version: latestVersion, mode: asarNeedsElevation ? 'asar-elevated' : 'asar' };
   }
 
   if (asarAsset && !canWriteAsar) {
-    appendFocusLog(`UPDATE ASAR asset found but no write access: ${currentAsarPath || '<unknown>'}`);
+    appendFocusLog(`UPDATE ASAR asset found but no write access: ${currentAsarPath || '<unknown>'} elevation=${UPDATE_ALLOW_ASAR_ELEVATION ? 'enabled' : 'disabled'}`);
     if (!UPDATE_ALLOW_BINARY_FALLBACK) {
       send({
-        text: 'No hay permisos para aplicar el parche del launcher en esta instalacion.',
+        text: UPDATE_ALLOW_ASAR_ELEVATION
+          ? 'No se pudo iniciar el parche con permisos de administrador.'
+          : 'No hay permisos para aplicar el parche del launcher en esta instalacion.',
         phase: 'manual',
         showProgress: false,
         progress: null,

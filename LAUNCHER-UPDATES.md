@@ -17,6 +17,7 @@ Al iniciar (si `XENO_UPDATE_MODE=auto`), el launcher busca updates y aplica este
 1. **Parche ASAR (preferido)**
    - Asset esperado: archivo `.asar` en la release (ejemplo: `XenoLauncher-App-1.0.0.asar`).
    - Este modo actualiza solo el codigo del launcher y reinicia.
+   - Si el launcher esta instalado en carpeta protegida (ej: `Program Files`), solicita UAC y aplica el parche sin reinstalar setup.
    - Es el flujo mas liviano para cambios frecuentes.
 2. Setup/Portable (fallback opcional)
    - Solo se usa si activas `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
@@ -48,6 +49,7 @@ npm start
 - `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
 - `XENO_UPDATE_ALLOW_UNAPPROVED=true` (solo local)
 - `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
+- `XENO_UPDATE_ALLOW_ASAR_ELEVATION=true|false` (default: `true`)
 
 ### Flujo recomendado de release
 1. Compilar:
@@ -84,6 +86,7 @@ On startup (if `XENO_UPDATE_MODE=auto`), launcher checks updates in this order:
 1. **ASAR patch (preferred)**
    - Expected asset: `.asar` file in the release (example: `XenoLauncher-App-1.0.0.asar`).
    - Updates launcher code only, then restarts.
+   - If launcher is installed in a protected folder (e.g. `Program Files`), it requests UAC and applies the patch without reinstalling setup.
    - This is the lightest flow for frequent code changes.
 2. Setup/Portable (optional fallback)
    - Only used if `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
@@ -115,6 +118,7 @@ npm start
 - `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
 - `XENO_UPDATE_ALLOW_UNAPPROVED=true` (local only)
 - `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
+- `XENO_UPDATE_ALLOW_ASAR_ELEVATION=true|false` (default: `true`)
 
 ### Recommended release flow
 1. Build:
