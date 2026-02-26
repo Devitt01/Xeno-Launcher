@@ -32,6 +32,10 @@ app.disableHardwareAcceleration();
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_ID);
 }
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
 
 const store = new Store({
   name: 'xeno-launcher',
@@ -61,6 +65,13 @@ let pendingSplashStatus = {
 };
 const activeLaunches = new Map();
 const activeInstalls = new Map();
+
+app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
 
 const MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
 const FABRIC_META_GAME_URL = 'https://meta.fabricmc.net/v2/versions/game';
@@ -965,7 +976,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       .update(`${asarAsset.name}|${asarAsset.url}|${latestMarker || latestVersion || 'patch'}`)
       .digest('hex')
       .slice(0, 12);
-    const patchPath = path.join(updatesDir, `xeno-launcher-patch-${patchToken}.bin`);
+    const patchRunId = `${patchToken}-${Date.now()}-${process.pid}`;
+    const patchPath = path.join(updatesDir, `xeno-launcher-patch-${patchRunId}.bin`);
     appendFocusLog(`UPDATE Asset selected (asar): ${asarAsset.name}`);
     try {
       if (fs.existsSync(patchPath)) fs.unlinkSync(patchPath);
@@ -1004,6 +1016,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
           setTimeout(() => reject(new Error('Timeout de descarga.')), UPDATE_DOWNLOAD_TIMEOUT_MS);
         })
       ]);
+      appendFocusLog(`UPDATE ASAR downloaded: ${patchPath}`);
     } catch (err) {
       appendFocusLog(`UPDATE ASAR download failed: ${String(err)}`);
       send({
