@@ -22,6 +22,7 @@ Al iniciar (si `XENO_UPDATE_MODE=auto`), el launcher busca updates y aplica este
 2. Setup/Portable (fallback opcional)
    - Solo se usa si activas `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
    - Por defecto esta desactivado para evitar bajar setup/portable nuevamente.
+   - Recovery automatico: si un parche ASAR falla repetidamente en la misma build, puede pasar a setup/portable sin accion manual del usuario.
 
 ### Bloqueo de rollout (permiso manual)
 Por defecto, la app **no aplica** una release nueva para usuarios si no esta aprobada.
@@ -50,6 +51,8 @@ npm start
 - `XENO_UPDATE_ALLOW_UNAPPROVED=true` (solo local)
 - `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
 - `XENO_UPDATE_ALLOW_ASAR_ELEVATION=true|false` (default: `true`)
+- `XENO_UPDATE_ENABLE_BINARY_RECOVERY=true|false` (default: `true`)
+- `XENO_UPDATE_BINARY_RECOVERY_ATTEMPTS=<n>` (default: `3`)
 
 ### Flujo recomendado de release
 1. Compilar:
@@ -91,6 +94,7 @@ On startup (if `XENO_UPDATE_MODE=auto`), launcher checks updates in this order:
 2. Setup/Portable (optional fallback)
    - Only used if `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
    - Disabled by default to avoid re-downloading setup/portable.
+   - Automatic recovery: if ASAR patching repeatedly fails for the same build, launcher can switch to setup/portable without manual user action.
 
 ### Rollout lock (manual permission)
 By default, app **does not apply** new release for users unless it is approved.
@@ -119,6 +123,8 @@ npm start
 - `XENO_UPDATE_ALLOW_UNAPPROVED=true` (local only)
 - `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
 - `XENO_UPDATE_ALLOW_ASAR_ELEVATION=true|false` (default: `true`)
+- `XENO_UPDATE_ENABLE_BINARY_RECOVERY=true|false` (default: `true`)
+- `XENO_UPDATE_BINARY_RECOVERY_ATTEMPTS=<n>` (default: `3`)
 
 ### Recommended release flow
 1. Build:

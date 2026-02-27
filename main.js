@@ -37,6 +37,41 @@ if (!gotSingleInstanceLock) {
   app.quit();
 }
 
+function sanitizeStoreFileBeforeLoad() {
+  try {
+    const userData = app.getPath('userData');
+    const storePath = path.join(userData, 'xeno-launcher.json');
+    if (!storePath || !fs.existsSync(storePath)) return;
+
+    let raw = fs.readFileSync(storePath, 'utf8');
+    if (!raw) return;
+
+    let changed = false;
+    if (raw.charCodeAt(0) === 0xFEFF) {
+      raw = raw.replace(/^\uFEFF/, '');
+      changed = true;
+    }
+
+    try {
+      JSON.parse(raw);
+      if (changed) fs.writeFileSync(storePath, raw, 'utf8');
+      return;
+    } catch {
+      // try backup recovery
+    }
+
+    const backupPath = `${storePath}.bak`;
+    if (!fs.existsSync(backupPath)) return;
+    const backupRaw = fs.readFileSync(backupPath, 'utf8').replace(/^\uFEFF/, '');
+    JSON.parse(backupRaw);
+    fs.writeFileSync(storePath, backupRaw, 'utf8');
+  } catch {
+    // ignore preflight recovery errors
+  }
+}
+
+sanitizeStoreFileBeforeLoad();
+
 const store = new Store({
   name: 'xeno-launcher',
   defaults: {
@@ -47,6 +82,7 @@ const store = new Store({
     lastAppliedUpdateMarker: '',
     lastUpdateAttemptMarker: '',
     lastUpdateAttemptAt: 0,
+    lastUpdateAttemptCount: 0,
     lastUpdateAttemptPatchPath: '',
     lastUpdateAttemptPatchSha1: '',
     forgeMcVersions: [],
@@ -118,6 +154,11 @@ const UPDATE_ALLOW_UNAPPROVED = /^(1|true|yes)$/i.test(String(process.env.XENO_U
 const UPDATE_APPROVAL_TOKEN = String(process.env.XENO_UPDATE_APPROVAL_TOKEN || 'XENO_PUBLIC_UPDATE').trim();
 const UPDATE_ALLOW_BINARY_FALLBACK = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_BINARY_FALLBACK || '').trim());
 const UPDATE_ALLOW_ASAR_ELEVATION = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_ALLOW_ASAR_ELEVATION || 'true').trim());
+const UPDATE_ENABLE_BINARY_RECOVERY = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_ENABLE_BINARY_RECOVERY || 'true').trim());
+const parsedBinaryRecoveryAttempts = Number.parseInt(String(process.env.XENO_UPDATE_BINARY_RECOVERY_ATTEMPTS || '3').trim(), 10);
+const UPDATE_BINARY_RECOVERY_ATTEMPTS = Number.isFinite(parsedBinaryRecoveryAttempts) && parsedBinaryRecoveryAttempts > 0
+  ? parsedBinaryRecoveryAttempts
+  : 3;
 const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
 
@@ -515,6 +556,7 @@ function sha1File(filePath) {
 function clearPendingUpdateAttempt() {
   store.set('lastUpdateAttemptMarker', '');
   store.set('lastUpdateAttemptAt', 0);
+  store.set('lastUpdateAttemptCount', 0);
   store.set('lastUpdateAttemptPatchPath', '');
   store.set('lastUpdateAttemptPatchSha1', '');
 }
@@ -1101,13 +1143,15 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const appliedMarker = String(store.get('lastAppliedUpdateMarker', '') || '').trim();
   const lastAttemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
   const lastAttemptAt = Number(store.get('lastUpdateAttemptAt', 0)) || 0;
+  const lastAttemptCount = Number(store.get('lastUpdateAttemptCount', 0)) || 0;
   const lastAttemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
   const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
   const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+  const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || sha1File(lastAttemptPatchPath)).toLowerCase();
   const hasAttemptHashMismatch = !!(
-    lastAttemptPatchSha1 &&
+    attemptPatchReferenceSha1 &&
     currentAsarSha1 &&
-    lastAttemptPatchSha1 !== currentAsarSha1
+    attemptPatchReferenceSha1 !== currentAsarSha1
   );
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
 
@@ -1198,9 +1242,18 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     isRetrySameMarker &&
     UPDATE_ALLOW_ASAR_ELEVATION
   );
+  const shouldUseBinaryRecovery = !!(
+    UPDATE_ENABLE_BINARY_RECOVERY &&
+    isRetrySameMarker &&
+    lastAttemptCount >= UPDATE_BINARY_RECOVERY_ATTEMPTS
+  );
+  const allowBinaryFallback = UPDATE_ALLOW_BINARY_FALLBACK || shouldUseBinaryRecovery;
+  if (shouldUseBinaryRecovery) {
+    appendFocusLog(`UPDATE Binary recovery enabled for marker ${latestMarker} after ${lastAttemptCount} failed ASAR attempts`);
+  }
   const asarNeedsElevation = !!currentAsarPath && (!canWriteAsar || shouldForceElevationRetry);
   const canPatchAsar = !!asarAsset && !!currentAsarPath && (canWriteAsar || UPDATE_ALLOW_ASAR_ELEVATION);
-  if (canPatchAsar) {
+  if (canPatchAsar && !shouldUseBinaryRecovery) {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     ensureDir(updatesDir);
     const statusPath = path.join(updatesDir, 'asar-update-status.json');
@@ -1215,11 +1268,11 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       isRetrySameMarker &&
       lastAttemptPatchPath &&
       fs.existsSync(lastAttemptPatchPath) &&
-      lastAttemptPatchSha1
+      attemptPatchReferenceSha1
     );
     if (canReusePreviousPatch) {
       const reuseSha1 = sha1File(lastAttemptPatchPath).toLowerCase();
-      if (reuseSha1 && reuseSha1 === lastAttemptPatchSha1) {
+      if (reuseSha1 && reuseSha1 === attemptPatchReferenceSha1) {
         patchPath = lastAttemptPatchPath;
         patchSha1 = reuseSha1;
         appendFocusLog(`UPDATE Reusing previous ASAR patch for marker ${latestMarker}: ${patchPath}`);
@@ -1350,6 +1403,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     if (latestMarker) {
       store.set('lastUpdateAttemptMarker', latestMarker);
       store.set('lastUpdateAttemptAt', Date.now());
+      store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
       store.set('lastUpdateAttemptPatchPath', patchPath);
       store.set('lastUpdateAttemptPatchSha1', patchSha1);
     }
@@ -1368,7 +1422,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
   if (asarAsset && !canWriteAsar) {
     appendFocusLog(`UPDATE ASAR asset found but no write access: ${currentAsarPath || '<unknown>'} elevation=${UPDATE_ALLOW_ASAR_ELEVATION ? 'enabled' : 'disabled'}`);
-    if (!UPDATE_ALLOW_BINARY_FALLBACK) {
+    if (!allowBinaryFallback) {
       send({
         text: UPDATE_ALLOW_ASAR_ELEVATION
           ? 'No se pudo iniciar el parche con permisos de administrador.'
@@ -1382,7 +1436,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     }
   }
 
-  if (!asarAsset && !UPDATE_ALLOW_BINARY_FALLBACK) {
+  if (!asarAsset && !allowBinaryFallback) {
     appendFocusLog('UPDATE Missing ASAR patch asset (binary fallback disabled)');
     send({
       text: 'Release sin parche .asar. Update pausado hasta que publiques parche.',
@@ -1553,6 +1607,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   if (latestMarker) {
     store.set('lastUpdateAttemptMarker', latestMarker);
     store.set('lastUpdateAttemptAt', Date.now());
+    store.set('lastUpdateAttemptCount', 0);
     store.set('lastUpdateAttemptPatchPath', '');
     store.set('lastUpdateAttemptPatchSha1', '');
   }
