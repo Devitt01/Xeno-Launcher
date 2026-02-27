@@ -542,6 +542,25 @@ function buildReleaseAssetsMarker(assets) {
   return crypto.createHash('sha1').update(raw).digest('hex');
 }
 
+function buildPreferredUpdateMarkerFromAssets(assets) {
+  const normalized = normalizeReleaseAssets(assets);
+  if (normalized.length === 0) return 'no-assets';
+
+  const asar = selectAsarUpdateAsset(normalized);
+  if (asar) {
+    return `asar:${buildReleaseAssetsMarker([asar])}`;
+  }
+
+  const setup = selectWindowsSetupAsset(normalized);
+  const portable = selectWindowsPortableAsset(normalized);
+  const preferred = [setup, portable].filter(Boolean);
+  if (preferred.length > 0) {
+    return `win:${buildReleaseAssetsMarker(preferred)}`;
+  }
+
+  return `all:${buildReleaseAssetsMarker(normalized)}`;
+}
+
 function sha1File(filePath) {
   try {
     const full = path.resolve(String(filePath || '').trim());
@@ -1036,7 +1055,7 @@ async function fetchLatestReleaseInfo() {
       || manifest.marker
       || ''
     ).trim();
-    const marker = markerFromManifest || `manifest:${version || '0.0.0'}:${buildReleaseAssetsMarker(assets)}`;
+    const marker = markerFromManifest || `manifest:${version || '0.0.0'}:${buildPreferredUpdateMarkerFromAssets(assets)}`;
     const approved = manifest && manifest.approved === true
       ? true
       : isReleaseApproved(manifest);
@@ -1080,7 +1099,7 @@ async function fetchLatestReleaseInfo() {
 
   const version = normalizeVersion(data.tag_name || data.name || '');
   const assets = normalizeReleaseAssets(data.assets || []);
-  const marker = `github:${String(data.id || data.tag_name || version || 'latest')}:${buildReleaseAssetsMarker(assets)}`;
+  const marker = `github:${version || '0.0.0'}:${buildPreferredUpdateMarkerFromAssets(assets)}`;
   const approved = isReleaseApproved(data);
   return {
     version,
