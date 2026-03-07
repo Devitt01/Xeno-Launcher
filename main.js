@@ -1559,8 +1559,14 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   }
 
   appendFocusLog(`UPDATE Strategy=${UPDATE_STRATEGY}`);
-  const preferAsarFlow = UPDATE_STRATEGY !== 'binary';
   const asarAsset = selectAsarUpdateAsset(latest.assets);
+  const hasSameVersionPatch = !!(!hasVersionUpdate && hasMarkerUpdate && asarAsset);
+  const preferAsarFlow = UPDATE_STRATEGY === 'asar'
+    || UPDATE_STRATEGY === 'auto'
+    || (UPDATE_STRATEGY === 'binary' && hasSameVersionPatch);
+  if (hasSameVersionPatch && UPDATE_STRATEGY === 'binary') {
+    appendFocusLog('UPDATE Same-version marker change detected; forcing ASAR-first flow');
+  }
   const currentAsarPath = getCurrentAppAsarPath();
   const canWriteAsar = !!currentAsarPath && hasDirectoryWriteAccess(path.dirname(currentAsarPath));
   const isRetrySameMarker = !!(
@@ -1589,6 +1595,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const asarNeedsElevation = !!currentAsarPath && (!canWriteAsar || shouldForceElevationRetry);
   const canPatchAsar = !!asarAsset && !!currentAsarPath && (canWriteAsar || UPDATE_ALLOW_ASAR_ELEVATION);
   if (preferAsarFlow && canPatchAsar && !shouldUseBinaryRecovery) {
+    let asarFailedButCanFallback = false;
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     ensureDir(updatesDir);
     const statusPath = path.join(updatesDir, UPDATE_STATUS_ASAR_FILE);
@@ -1659,45 +1666,85 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
         appendFocusLog(`UPDATE ASAR downloaded: ${patchPath}`);
       } catch (err) {
         appendFocusLog(`UPDATE ASAR download failed: ${String(err)}`);
-        send({
-          text: 'Fallo la descarga del parche del launcher. Continuando...',
-          phase: 'error',
-          showProgress: false,
-          progress: null,
-          indeterminate: false
-        });
-        return { updateAvailable: true, failed: true, error: String(err) };
-      }
-  
-      try {
-        const stat = fs.statSync(patchPath);
-        const assetExt = path.extname(String(asarAsset.name || '')).toLowerCase();
-        if (assetExt !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
-          throw new Error('Parche ASAR invalido.');
+        if (allowBinaryFallback) {
+          asarFailedButCanFallback = true;
+          appendFocusLog('UPDATE ASAR download failed; falling back to binary installer');
+          send({
+            text: 'Parche ASAR fallo. Intentando instalador del launcher...',
+            phase: 'checking',
+            showProgress: true,
+            progress: null,
+            indeterminate: true
+          });
+        } else {
+          send({
+            text: 'Fallo la descarga del parche del launcher. Continuando...',
+            phase: 'error',
+            showProgress: false,
+            progress: null,
+            indeterminate: false
+          });
+          return { updateAvailable: true, failed: true, error: String(err) };
         }
-      } catch (err) {
-        appendFocusLog(`UPDATE ASAR validation failed: ${String(err)}`);
-        send({
-          text: 'El parche del launcher no es valido. Continuando...',
-          phase: 'error',
-          showProgress: false,
-          progress: null,
-          indeterminate: false
-        });
-        return { updateAvailable: true, failed: true, error: String(err) };
       }
   
-      patchSha1 = sha1File(patchPath);
-      if (!patchSha1) {
-        appendFocusLog(`UPDATE ASAR hash failed: ${patchPath}`);
-        send({
-          text: 'No se pudo validar hash del parche del launcher. Continuando...',
-          phase: 'error',
-          showProgress: false,
-          progress: null,
-          indeterminate: false
-        });
-        return { updateAvailable: true, failed: true, error: 'No se pudo calcular hash del parche ASAR.' };
+      if (!asarFailedButCanFallback) {
+        try {
+          const stat = fs.statSync(patchPath);
+          const assetExt = path.extname(String(asarAsset.name || '')).toLowerCase();
+          if (assetExt !== '.asar' || stat.size < UPDATE_MIN_ASAR_BYTES) {
+            throw new Error('Parche ASAR invalido.');
+          }
+        } catch (err) {
+          appendFocusLog(`UPDATE ASAR validation failed: ${String(err)}`);
+          if (allowBinaryFallback) {
+            asarFailedButCanFallback = true;
+            appendFocusLog('UPDATE ASAR validation failed; falling back to binary installer');
+            send({
+              text: 'Parche ASAR invalido. Intentando instalador del launcher...',
+              phase: 'checking',
+              showProgress: true,
+              progress: null,
+              indeterminate: true
+            });
+          } else {
+            send({
+              text: 'El parche del launcher no es valido. Continuando...',
+              phase: 'error',
+              showProgress: false,
+              progress: null,
+              indeterminate: false
+            });
+            return { updateAvailable: true, failed: true, error: String(err) };
+          }
+        }
+      }
+  
+      if (!asarFailedButCanFallback) {
+        patchSha1 = sha1File(patchPath);
+        if (!patchSha1) {
+          appendFocusLog(`UPDATE ASAR hash failed: ${patchPath}`);
+          if (allowBinaryFallback) {
+            asarFailedButCanFallback = true;
+            appendFocusLog('UPDATE ASAR hash failed; falling back to binary installer');
+            send({
+              text: 'No se pudo validar el parche ASAR. Intentando instalador del launcher...',
+              phase: 'checking',
+              showProgress: true,
+              progress: null,
+              indeterminate: true
+            });
+          } else {
+            send({
+              text: 'No se pudo validar hash del parche del launcher. Continuando...',
+              phase: 'error',
+              showProgress: false,
+              progress: null,
+              indeterminate: false
+            });
+            return { updateAvailable: true, failed: true, error: 'No se pudo calcular hash del parche ASAR.' };
+          }
+        }
       }
     } else {
       send({
@@ -1709,51 +1756,64 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       });
     }
 
-    send({
-      text: asarNeedsElevation
-        ? 'Aplicando parche del launcher (se pediran permisos de administrador)...'
-        : 'Aplicando parche del launcher...',
-      phase: 'installing',
-      progress: 100,
-      indeterminate: true,
-      showProgress: true
-    });
-
-    const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker, {
-      elevate: asarNeedsElevation,
-      launcherPid: process.pid
-    });
-    if (!launched) {
-      appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
+    if (!asarFailedButCanFallback) {
       send({
-        text: 'No se pudo aplicar el parche del launcher.',
-        phase: 'error',
-        showProgress: false,
-        progress: null,
-        indeterminate: false
+        text: asarNeedsElevation
+          ? 'Aplicando parche del launcher (se pediran permisos de administrador)...'
+          : 'Aplicando parche del launcher...',
+        phase: 'installing',
+        progress: 100,
+        indeterminate: true,
+        showProgress: true
       });
-      return { updateAvailable: true, failed: true, error: 'No se pudo iniciar actualizacion ASAR.' };
-    }
 
-    if (latestMarker) {
-      store.set('lastUpdateAttemptMarker', latestMarker);
-      store.set('lastUpdateAttemptAt', Date.now());
-      store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
-      store.set('lastUpdateAttemptPatchPath', patchPath);
-      store.set('lastUpdateAttemptPatchSha1', patchSha1);
-      clearBinaryAttemptFingerprint();
+      const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker, {
+        elevate: asarNeedsElevation,
+        launcherPid: process.pid
+      });
+      if (!launched) {
+        appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
+        if (allowBinaryFallback) {
+          appendFocusLog('UPDATE ASAR launcher failed; falling back to binary installer');
+          send({
+            text: 'No se pudo iniciar parche ASAR. Intentando instalador del launcher...',
+            phase: 'checking',
+            showProgress: true,
+            progress: null,
+            indeterminate: true
+          });
+        } else {
+          send({
+            text: 'No se pudo aplicar el parche del launcher.',
+            phase: 'error',
+            showProgress: false,
+            progress: null,
+            indeterminate: false
+          });
+          return { updateAvailable: true, failed: true, error: 'No se pudo iniciar actualizacion ASAR.' };
+        }
+      } else {
+        if (latestMarker) {
+          store.set('lastUpdateAttemptMarker', latestMarker);
+          store.set('lastUpdateAttemptAt', Date.now());
+          store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
+          store.set('lastUpdateAttemptPatchPath', patchPath);
+          store.set('lastUpdateAttemptPatchSha1', patchSha1);
+          clearBinaryAttemptFingerprint();
+        }
+        appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
+        send({
+          text: asarNeedsElevation
+            ? 'Parche descargado. Esperando permisos y reinicio del launcher...'
+            : 'Parche aplicado. Reiniciando launcher...',
+          phase: 'installing',
+          progress: 100,
+          indeterminate: true,
+          showProgress: true
+        });
+        return { installing: true, version: latestVersion, mode: asarNeedsElevation ? 'asar-elevated' : 'asar' };
+      }
     }
-    appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
-    send({
-      text: asarNeedsElevation
-        ? 'Parche descargado. Esperando permisos y reinicio del launcher...'
-        : 'Parche aplicado. Reiniciando launcher...',
-      phase: 'installing',
-      progress: 100,
-      indeterminate: true,
-      showProgress: true
-    });
-    return { installing: true, version: latestVersion, mode: asarNeedsElevation ? 'asar-elevated' : 'asar' };
   }
 
   if (preferAsarFlow && asarAsset && !canWriteAsar) {
