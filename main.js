@@ -1167,6 +1167,10 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
   const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
   const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || sha1File(lastAttemptPatchPath)).toLowerCase();
+  const hasUnknownAttemptHash = !!(
+    attemptPatchReferenceSha1 &&
+    !currentAsarSha1
+  );
   const hasAttemptHashMismatch = !!(
     attemptPatchReferenceSha1 &&
     currentAsarSha1 &&
@@ -1188,7 +1192,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     latestMarker &&
     lastAttemptMarker === latestMarker &&
     Date.now() - lastAttemptAt < 5 * 60 * 1000 &&
-    !hasAttemptHashMismatch
+    !hasAttemptHashMismatch &&
+    !hasUnknownAttemptHash
   ) {
     appendFocusLog(`UPDATE Recent attempt detected for marker ${latestMarker}; skipping to avoid restart loop`);
     send({
@@ -1202,6 +1207,9 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   }
   if (hasMarkerUpdate && latestMarker && lastAttemptMarker === latestMarker && hasAttemptHashMismatch) {
     appendFocusLog(`UPDATE Retry enabled for marker ${latestMarker}: detected ASAR hash mismatch`);
+  }
+  if (hasMarkerUpdate && latestMarker && lastAttemptMarker === latestMarker && hasUnknownAttemptHash) {
+    appendFocusLog(`UPDATE Retry enabled for marker ${latestMarker}: current ASAR hash unavailable`);
   }
 
   if (hasVersionUpdate) {
@@ -1255,7 +1263,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     latestMarker &&
     lastAttemptMarker &&
     lastAttemptMarker === latestMarker &&
-    hasAttemptHashMismatch
+    (hasAttemptHashMismatch || hasUnknownAttemptHash)
   );
   const shouldForceElevationRetry = !!(
     isRetrySameMarker &&
