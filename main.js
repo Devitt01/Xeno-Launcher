@@ -1589,6 +1589,17 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   if (shouldUseBinaryRecovery) {
     appendFocusLog(`UPDATE Binary recovery enabled for marker ${latestMarker} after ${lastAttemptCount} failed ASAR attempts`);
   }
+  if (!hasVersionUpdate && hasMarkerUpdate && !asarAsset) {
+    appendFocusLog('UPDATE Same-version release without ASAR patch; binary same-version update skipped');
+    send({
+      text: 'Build detectada (misma version), pero falta parche .asar para aplicar update automatica.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { updateAvailable: true, manual: true, version: latestVersion, reason: 'same_version_without_asar' };
+  }
   if (!preferAsarFlow && asarAsset) {
     appendFocusLog(`UPDATE ASAR flow skipped by strategy (${UPDATE_STRATEGY})`);
   }
