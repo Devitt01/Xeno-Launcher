@@ -148,6 +148,8 @@ const UPDATE_DOWNLOAD_TIMEOUT_MS = 180000;
 const UPDATE_MANIFEST_URL = String(process.env.XENO_UPDATE_MANIFEST_URL || '').trim();
 const UPDATE_REPO_OVERRIDE = String(process.env.XENO_UPDATE_REPO || '').trim();
 const UPDATE_MODE = String(process.env.XENO_UPDATE_MODE || 'auto').trim().toLowerCase();
+const UPDATE_STRATEGY_RAW = String(process.env.XENO_UPDATE_STRATEGY || 'binary').trim().toLowerCase();
+const UPDATE_STRATEGY = ['auto', 'asar', 'binary'].includes(UPDATE_STRATEGY_RAW) ? UPDATE_STRATEGY_RAW : 'binary';
 const UPDATE_INCLUDE_PRERELEASE = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_INCLUDE_PRERELEASE || '').trim());
 const UPDATE_REQUIRE_APPROVAL = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_REQUIRE_APPROVAL || 'true').trim());
 const UPDATE_ALLOW_UNAPPROVED = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_UNAPPROVED || '').trim());
@@ -160,6 +162,8 @@ const UPDATE_BINARY_RECOVERY_ATTEMPTS = Number.isFinite(parsedBinaryRecoveryAtte
   ? parsedBinaryRecoveryAttempts
   : 3;
 const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
+const UPDATE_STATUS_ASAR_FILE = 'asar-update-status.json';
+const UPDATE_STATUS_BINARY_FILE = 'binary-update-status.json';
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const addonCache = {
@@ -542,20 +546,46 @@ function buildReleaseAssetsMarker(assets) {
   return crypto.createHash('sha1').update(raw).digest('hex');
 }
 
-function buildPreferredUpdateMarkerFromAssets(assets) {
+function getUpdateMarkerOptions() {
+  return {
+    strategy: UPDATE_STRATEGY,
+    windowsMode: process.platform === 'win32' ? getWindowsUpdateMode() : ''
+  };
+}
+
+function buildPreferredUpdateMarkerFromAssets(assets, options = {}) {
   const normalized = normalizeReleaseAssets(assets);
   if (normalized.length === 0) return 'no-assets';
 
-  const asar = selectAsarUpdateAsset(normalized);
-  if (asar) {
-    return `asar:${buildReleaseAssetsMarker([asar])}`;
+  const strategyRaw = String(options.strategy || UPDATE_STRATEGY || 'binary').trim().toLowerCase();
+  const strategy = ['auto', 'asar', 'binary'].includes(strategyRaw) ? strategyRaw : 'binary';
+  const preferAsar = strategy !== 'binary';
+  if (preferAsar) {
+    const asar = selectAsarUpdateAsset(normalized);
+    if (asar) {
+      return `asar:${buildReleaseAssetsMarker([asar])}`;
+    }
   }
 
-  const setup = selectWindowsSetupAsset(normalized);
-  const portable = selectWindowsPortableAsset(normalized);
-  const preferred = [setup, portable].filter(Boolean);
-  if (preferred.length > 0) {
-    return `win:${buildReleaseAssetsMarker(preferred)}`;
+  if (process.platform === 'win32') {
+    const windowsMode = String(options.windowsMode || getWindowsUpdateMode() || '').trim().toLowerCase();
+    const setup = selectWindowsSetupAsset(normalized);
+    const portable = selectWindowsPortableAsset(normalized);
+    const modePreferred = windowsMode === 'portable' ? portable : setup;
+    if (modePreferred) {
+      return `win-${windowsMode === 'portable' ? 'portable' : 'setup'}:${buildReleaseAssetsMarker([modePreferred])}`;
+    }
+    const preferred = [setup, portable].filter(Boolean);
+    if (preferred.length > 0) {
+      return `win:${buildReleaseAssetsMarker(preferred)}`;
+    }
+  }
+
+  if (!preferAsar) {
+    const asarFallback = selectAsarUpdateAsset(normalized);
+    if (asarFallback) {
+      return `asar:${buildReleaseAssetsMarker([asarFallback])}`;
+    }
   }
 
   return `all:${buildReleaseAssetsMarker(normalized)}`;
@@ -734,20 +764,6 @@ function spawnDetached(command, args = []) {
   }
 }
 
-function launchInstaller(installerPath) {
-  const ext = path.extname(String(installerPath || '')).toLowerCase();
-  if (ext === '.msi') {
-    return spawnDetached('msiexec', ['/i', installerPath, '/passive']);
-  }
-
-  return (
-    spawnDetached(installerPath, ['/S']) ||
-    spawnDetached(installerPath, ['/SILENT']) ||
-    spawnDetached(installerPath, ['/silent']) ||
-    spawnDetached(installerPath, [])
-  );
-}
-
 function psQuote(value) {
   return `'${String(value || '').replace(/'/g, "''")}'`;
 }
@@ -756,29 +772,157 @@ function psEncode(script) {
   return Buffer.from(String(script || ''), 'utf16le').toString('base64');
 }
 
-function launchPortableSelfUpdater(downloadedExePath) {
+function buildInstallerApplyScript({ installerPath, statusPath, marker, exePath, launcherPid }) {
+  const launcherPidValue = Number.isFinite(Number(launcherPid)) ? Math.max(0, Math.trunc(Number(launcherPid))) : 0;
+  return [
+    `$installer=${psQuote(installerPath)}`,
+    `$status=${psQuote(statusPath)}`,
+    `$marker=${psQuote(String(marker || ''))}`,
+    `$exe=${psQuote(exePath)}`,
+    `$launcherPid=${launcherPidValue}`,
+    '$ok=$false',
+    '$errorMessage=""',
+    '$restartError=""',
+    '$started=$false',
+    '$exitCode=$null',
+    '$isMsi=$installer.ToLower().EndsWith(".msi")',
+    'if($launcherPid -gt 0){',
+    '  for($k=0;$k -lt 240;$k++){',
+    '    try {',
+    '      $proc = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue',
+    '    } catch {',
+    '      $proc = $null',
+    '    }',
+    '    if(-not $proc){ break }',
+    '    Start-Sleep -Milliseconds 250',
+    '  }',
+    '}',
+    'Start-Sleep -Milliseconds 300',
+    '$argSets = @(@("/S"), @("/SILENT"), @("/silent"), @())',
+    'if($isMsi){ $argSets = @(@("/i", $installer, "/passive")) }',
+    'foreach($argSet in $argSets){',
+    '  try {',
+    '    if($isMsi){',
+    '      $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList $argSet -PassThru -ErrorAction Stop',
+    '    } elseif($argSet.Count -gt 0) {',
+    '      $proc = Start-Process -FilePath $installer -ArgumentList $argSet -PassThru -ErrorAction Stop',
+    '    } else {',
+    '      $proc = Start-Process -FilePath $installer -PassThru -ErrorAction Stop',
+    '    }',
+    '    if($proc){',
+    '      try {',
+    '        $null = $proc.WaitForExit(1200000)',
+    '        $exitCode = $proc.ExitCode',
+    '      } catch {',
+    '        $exitCode = $null',
+    '      }',
+    '    }',
+    '    if($exitCode -eq $null -or $exitCode -eq 0){',
+    '      $ok=$true',
+    '      break',
+    '    }',
+    '    $errorMessage = "Installer exit code $exitCode"',
+    '  } catch {',
+    '    $errorMessage = [string]$_.Exception.Message',
+    '  }',
+    '  Start-Sleep -Milliseconds 350',
+    '}',
+    'if($ok){',
+    '  Start-Sleep -Milliseconds 350',
+    '  try {',
+    '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ErrorAction Stop | Out-Null',
+    '    $started=$true',
+    '  } catch {',
+    '    $restartError = [string]$_.Exception.Message',
+    '  }',
+    '}',
+    'try {',
+    '  $payload = @{ ok = $ok; marker = $marker; mode = "setup"; restarted = $started; exitCode = $exitCode; error = [string]$errorMessage; restartError = [string]$restartError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+    '} catch {}'
+  ].join(';');
+}
+
+function launchInstaller(installerPath, statusFilePath, marker = '', options = {}) {
+  try {
+    const installer = path.resolve(String(installerPath || '').trim());
+    const statusPath = path.resolve(String(statusFilePath || '').trim());
+    const exePath = path.resolve(app.getPath('exe'));
+    const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
+    if (!installer || !statusPath || !exePath) return false;
+    const script = buildInstallerApplyScript({
+      installerPath: installer,
+      statusPath,
+      marker,
+      exePath,
+      launcherPid
+    });
+    return spawnDetached('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-WindowStyle',
+      'Hidden',
+      '-Command',
+      script
+    ]);
+  } catch {
+    return false;
+  }
+}
+
+function launchPortableSelfUpdater(downloadedExePath, statusFilePath, marker = '', options = {}) {
   try {
     const src = path.resolve(String(downloadedExePath || '').trim());
     const dst = path.resolve(app.getPath('exe'));
-    if (!src || !dst || src.toLowerCase() === dst.toLowerCase()) return false;
+    const statusPath = path.resolve(String(statusFilePath || '').trim());
+    const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
+    if (!src || !dst || !statusPath || src.toLowerCase() === dst.toLowerCase()) return false;
 
     const script = [
       `$src=${psQuote(src)}`,
       `$dst=${psQuote(dst)}`,
+      `$status=${psQuote(statusPath)}`,
+      `$marker=${psQuote(String(marker || ''))}`,
+      `$launcherPid=${Number.isFinite(launcherPid) ? Math.max(0, Math.trunc(launcherPid)) : 0}`,
       '$ok=$false',
+      '$started=$false',
+      '$errorMessage=""',
+      '$restartError=""',
+      'if($launcherPid -gt 0){',
+      '  for($k=0;$k -lt 240;$k++){',
+      '    try {',
+      '      $proc = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue',
+      '    } catch {',
+      '      $proc = $null',
+      '    }',
+      '    if(-not $proc){ break }',
+      '    Start-Sleep -Milliseconds 250',
+      '  }',
+      '}',
       'for($i=0;$i -lt 120;$i++){',
       '  try {',
       '    Copy-Item -LiteralPath $src -Destination $dst -Force',
       '    $ok=$true',
       '    break',
       '  } catch {',
+      '    $errorMessage = [string]$_.Exception.Message',
       '    Start-Sleep -Milliseconds 500',
       '  }',
       '}',
       'if($ok){',
       '  Start-Sleep -Milliseconds 250',
-      '  Start-Process -FilePath $dst | Out-Null',
-      '}'
+      '  try {',
+      '    Start-Process -FilePath $dst -WorkingDirectory (Split-Path -Parent $dst) -ErrorAction Stop | Out-Null',
+      '    $started=$true',
+      '  } catch {',
+      '    $restartError = [string]$_.Exception.Message',
+      '  }',
+      '}',
+      'try {',
+      '  $payload = @{ ok = $ok; marker = $marker; mode = "portable"; restarted = $started; error = [string]$errorMessage; restartError = [string]$restartError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+      '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+      '} catch {}'
     ].join(';');
 
     return spawnDetached('powershell.exe', [
@@ -985,7 +1129,7 @@ function confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPa
 function consumeAsarUpdateStatus() {
   try {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
-    const statusPath = path.join(updatesDir, 'asar-update-status.json');
+    const statusPath = path.join(updatesDir, UPDATE_STATUS_ASAR_FILE);
     const attemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
     const attemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
     const attemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
@@ -1033,6 +1177,50 @@ function consumeAsarUpdateStatus() {
   }
 }
 
+function consumeBinaryUpdateStatus() {
+  try {
+    const updatesDir = path.join(app.getPath('userData'), 'updates');
+    const statusPath = path.join(updatesDir, UPDATE_STATUS_BINARY_FILE);
+    if (!fs.existsSync(statusPath)) return;
+
+    let payload = null;
+    try {
+      const raw = fs.readFileSync(statusPath, 'utf8').replace(/^\uFEFF/, '');
+      payload = JSON.parse(raw);
+    } catch {
+      payload = null;
+    }
+
+    try {
+      fs.unlinkSync(statusPath);
+    } catch {
+      // ignore
+    }
+
+    if (payload && payload.ok === true && payload.marker) {
+      const marker = String(payload.marker).trim();
+      if (marker) {
+        store.set('lastAppliedUpdateMarker', marker);
+        clearPendingUpdateAttempt();
+        appendFocusLog(`UPDATE BIN status confirmed marker: ${marker} mode=${String(payload.mode || 'setup')}`);
+      }
+      return;
+    }
+
+    const reason = payload && (payload.error || payload.restartError || payload.exitCode !== undefined)
+      ? String(payload.error || payload.restartError || `Installer exit code ${payload.exitCode}`)
+      : '';
+    store.set('lastUpdateAttemptAt', Date.now());
+    if (reason) {
+      appendFocusLog(`UPDATE BIN status indicates failure: ${reason}`);
+    } else {
+      appendFocusLog('UPDATE BIN status indicates failure');
+    }
+  } catch {
+    // ignore
+  }
+}
+
 async function fetchLatestReleaseInfo() {
   if (UPDATE_MANIFEST_URL) {
     const manifest = await requestJsonWithMethod(
@@ -1055,7 +1243,8 @@ async function fetchLatestReleaseInfo() {
       || manifest.marker
       || ''
     ).trim();
-    const marker = markerFromManifest || `manifest:${version || '0.0.0'}:${buildPreferredUpdateMarkerFromAssets(assets)}`;
+    const markerOptions = getUpdateMarkerOptions();
+    const marker = markerFromManifest || `manifest:${version || '0.0.0'}:${buildPreferredUpdateMarkerFromAssets(assets, markerOptions)}`;
     const approved = manifest && manifest.approved === true
       ? true
       : isReleaseApproved(manifest);
@@ -1099,7 +1288,8 @@ async function fetchLatestReleaseInfo() {
 
   const version = normalizeVersion(data.tag_name || data.name || '');
   const assets = normalizeReleaseAssets(data.assets || []);
-  const marker = `github:${version || '0.0.0'}:${buildPreferredUpdateMarkerFromAssets(assets)}`;
+  const markerOptions = getUpdateMarkerOptions();
+  const marker = `github:${version || '0.0.0'}:${buildPreferredUpdateMarkerFromAssets(assets, markerOptions)}`;
   const approved = isReleaseApproved(data);
   return {
     version,
@@ -1262,6 +1452,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { updateAvailable: true, manual: true, version: latestVersion, url: latest.htmlUrl || null };
   }
 
+  appendFocusLog(`UPDATE Strategy=${UPDATE_STRATEGY}`);
+  const preferAsarFlow = UPDATE_STRATEGY !== 'binary';
   const asarAsset = selectAsarUpdateAsset(latest.assets);
   const currentAsarPath = getCurrentAppAsarPath();
   const canWriteAsar = !!currentAsarPath && hasDirectoryWriteAccess(path.dirname(currentAsarPath));
@@ -1281,16 +1473,19 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     isRetrySameMarker &&
     lastAttemptCount >= UPDATE_BINARY_RECOVERY_ATTEMPTS
   );
-  const allowBinaryFallback = UPDATE_ALLOW_BINARY_FALLBACK || shouldUseBinaryRecovery;
+  const allowBinaryFallback = UPDATE_ALLOW_BINARY_FALLBACK || shouldUseBinaryRecovery || UPDATE_STRATEGY === 'binary';
   if (shouldUseBinaryRecovery) {
     appendFocusLog(`UPDATE Binary recovery enabled for marker ${latestMarker} after ${lastAttemptCount} failed ASAR attempts`);
   }
+  if (!preferAsarFlow && asarAsset) {
+    appendFocusLog(`UPDATE ASAR flow skipped by strategy (${UPDATE_STRATEGY})`);
+  }
   const asarNeedsElevation = !!currentAsarPath && (!canWriteAsar || shouldForceElevationRetry);
   const canPatchAsar = !!asarAsset && !!currentAsarPath && (canWriteAsar || UPDATE_ALLOW_ASAR_ELEVATION);
-  if (canPatchAsar && !shouldUseBinaryRecovery) {
+  if (preferAsarFlow && canPatchAsar && !shouldUseBinaryRecovery) {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     ensureDir(updatesDir);
-    const statusPath = path.join(updatesDir, 'asar-update-status.json');
+    const statusPath = path.join(updatesDir, UPDATE_STATUS_ASAR_FILE);
     const patchToken = crypto
       .createHash('sha1')
       .update(`${asarAsset.name}|${asarAsset.url}|${latestMarker || latestVersion || 'patch'}`)
@@ -1454,7 +1649,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { installing: true, version: latestVersion, mode: asarNeedsElevation ? 'asar-elevated' : 'asar' };
   }
 
-  if (asarAsset && !canWriteAsar) {
+  if (preferAsarFlow && asarAsset && !canWriteAsar) {
     appendFocusLog(`UPDATE ASAR asset found but no write access: ${currentAsarPath || '<unknown>'} elevation=${UPDATE_ALLOW_ASAR_ELEVATION ? 'enabled' : 'disabled'}`);
     if (!allowBinaryFallback) {
       send({
@@ -1542,9 +1737,11 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
   const updatesDir = path.join(app.getPath('userData'), 'updates');
   ensureDir(updatesDir);
+  const statusPath = path.join(updatesDir, UPDATE_STATUS_BINARY_FILE);
   const installerPath = path.join(updatesDir, sanitizeFileName(selectedAsset.name));
   appendFocusLog(`UPDATE Asset selected (${winUpdateMode}): ${selectedAsset.name}`);
   try {
+    if (fs.existsSync(statusPath)) fs.unlinkSync(statusPath);
     if (fs.existsSync(installerPath)) fs.unlinkSync(installerPath);
   } catch {
     // ignore
@@ -1623,8 +1820,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     showProgress: true
   });
   const launched = winUpdateMode === 'portable'
-    ? launchPortableSelfUpdater(installerPath)
-    : launchInstaller(installerPath);
+    ? launchPortableSelfUpdater(installerPath, statusPath, latestMarker, { launcherPid: process.pid })
+    : launchInstaller(installerPath, statusPath, latestMarker, { launcherPid: process.pid });
   if (!launched) {
     appendFocusLog(`UPDATE Could not launch installer ${installerPath}`);
     send({
@@ -1637,11 +1834,11 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { updateAvailable: true, failed: true, error: 'No se pudo iniciar el instalador.' };
   }
 
-  appendFocusLog(`UPDATE Installer launched: ${installerPath}`);
+  appendFocusLog(`UPDATE Installer launched: ${installerPath} mode=${winUpdateMode}`);
   if (latestMarker) {
     store.set('lastUpdateAttemptMarker', latestMarker);
     store.set('lastUpdateAttemptAt', Date.now());
-    store.set('lastUpdateAttemptCount', 0);
+    store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
     store.set('lastUpdateAttemptPatchPath', '');
     store.set('lastUpdateAttemptPatchSha1', '');
   }
@@ -3418,6 +3615,7 @@ app.whenReady().then(() => {
     Menu.setApplicationMenu(null);
   }
   consumeAsarUpdateStatus();
+  consumeBinaryUpdateStatus();
   splashWindow = createSplashWindow();
   const splashStart = Date.now();
   let splashDone = false;

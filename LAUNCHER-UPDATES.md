@@ -14,15 +14,13 @@ Al iniciar (si `XENO_UPDATE_MODE=auto`), el launcher busca updates y aplica este
    - `XENO_UPDATE_REPO`
    - `build.publish` (provider github) en `package.json`
    - `repository` en `package.json`
-1. **Parche ASAR (preferido)**
-   - Asset esperado: archivo `.asar` en la release (ejemplo: `XenoLauncher-App-1.0.0.asar`).
-   - Este modo actualiza solo el codigo del launcher y reinicia.
-   - Si el launcher esta instalado en carpeta protegida (ej: `Program Files`), solicita UAC y aplica el parche sin reinstalar setup.
-   - Es el flujo mas liviano para cambios frecuentes.
-2. Setup/Portable (fallback opcional)
-   - Solo se usa si activas `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
-   - Por defecto esta desactivado para evitar bajar setup/portable nuevamente.
-   - Recovery automatico: si un parche ASAR falla repetidamente en la misma build, puede pasar a setup/portable sin accion manual del usuario.
+1. **Setup/Portable (preferido por defecto)**
+   - Estrategia default: `XENO_UPDATE_STRATEGY=binary`.
+   - Usa `Setup` para instalaciones normales y `Portable` para runtime portable.
+   - Aplica update y reinicia el launcher automaticamente.
+2. Parche ASAR (opcional)
+   - Solo se usa como principal si configuras `XENO_UPDATE_STRATEGY=asar` o `auto`.
+   - En `auto`, intenta ASAR y puede recuperar con binario si detecta fallos repetidos.
 
 ### Bloqueo de rollout (permiso manual)
 Por defecto, la app **no aplica** una release nueva para usuarios si no esta aprobada.
@@ -46,6 +44,7 @@ npm start
 
 ### Variables utiles
 - `XENO_UPDATE_MODE=auto|manual`
+- `XENO_UPDATE_STRATEGY=binary|asar|auto` (default: `binary`)
 - `XENO_UPDATE_REQUIRE_APPROVAL=true|false` (default: `true`)
 - `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
 - `XENO_UPDATE_ALLOW_UNAPPROVED=true` (solo local)
@@ -86,15 +85,13 @@ On startup (if `XENO_UPDATE_MODE=auto`), launcher checks updates in this order:
    - `XENO_UPDATE_REPO`
    - `build.publish` (github provider) in `package.json`
    - `repository` in `package.json`
-1. **ASAR patch (preferred)**
-   - Expected asset: `.asar` file in the release (example: `XenoLauncher-App-1.0.0.asar`).
-   - Updates launcher code only, then restarts.
-   - If launcher is installed in a protected folder (e.g. `Program Files`), it requests UAC and applies the patch without reinstalling setup.
-   - This is the lightest flow for frequent code changes.
-2. Setup/Portable (optional fallback)
-   - Only used if `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true`.
-   - Disabled by default to avoid re-downloading setup/portable.
-   - Automatic recovery: if ASAR patching repeatedly fails for the same build, launcher can switch to setup/portable without manual user action.
+1. **Setup/Portable (preferred by default)**
+   - Default strategy: `XENO_UPDATE_STRATEGY=binary`.
+   - Uses `Setup` for normal installs and `Portable` for portable runtime.
+   - Applies update and restarts launcher automatically.
+2. ASAR patch (optional)
+   - Used as primary only if `XENO_UPDATE_STRATEGY=asar` or `auto`.
+   - In `auto`, launcher can still recover to binary update after repeated ASAR failures.
 
 ### Rollout lock (manual permission)
 By default, app **does not apply** new release for users unless it is approved.
@@ -118,6 +115,7 @@ npm start
 
 ### Useful env vars
 - `XENO_UPDATE_MODE=auto|manual`
+- `XENO_UPDATE_STRATEGY=binary|asar|auto` (default: `binary`)
 - `XENO_UPDATE_REQUIRE_APPROVAL=true|false` (default: `true`)
 - `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
 - `XENO_UPDATE_ALLOW_UNAPPROVED=true` (local only)
