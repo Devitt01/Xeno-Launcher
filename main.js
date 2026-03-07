@@ -85,6 +85,9 @@ const store = new Store({
     lastUpdateAttemptCount: 0,
     lastUpdateAttemptPatchPath: '',
     lastUpdateAttemptPatchSha1: '',
+    lastUpdateAttemptExeSize: 0,
+    lastUpdateAttemptExeMtimeMs: 0,
+    lastUpdateAttemptAsarSha1Before: '',
     forgeMcVersions: [],
     neoforgeMcVersions: [],
     fabricMcVersions: [],
@@ -164,6 +167,7 @@ const UPDATE_BINARY_RECOVERY_ATTEMPTS = Number.isFinite(parsedBinaryRecoveryAtte
 const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
 const UPDATE_STATUS_ASAR_FILE = 'asar-update-status.json';
 const UPDATE_STATUS_BINARY_FILE = 'binary-update-status.json';
+const UPDATE_BINARY_FINGERPRINT_FALLBACK_MS = 30 * 60 * 1000;
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const addonCache = {
@@ -602,12 +606,80 @@ function sha1File(filePath) {
   }
 }
 
+function getFileFingerprint(filePath) {
+  try {
+    const full = path.resolve(String(filePath || '').trim());
+    if (!full || !fs.existsSync(full)) {
+      return { size: 0, mtimeMs: 0 };
+    }
+    const stat = fs.statSync(full);
+    return {
+      size: Number(stat.size) || 0,
+      mtimeMs: Number(stat.mtimeMs) || 0
+    };
+  } catch {
+    return { size: 0, mtimeMs: 0 };
+  }
+}
+
+function clearBinaryAttemptFingerprint() {
+  store.set('lastUpdateAttemptExeSize', 0);
+  store.set('lastUpdateAttemptExeMtimeMs', 0);
+  store.set('lastUpdateAttemptAsarSha1Before', '');
+}
+
+function saveBinaryAttemptFingerprint() {
+  try {
+    const exePath = app.getPath('exe');
+    const exeFingerprint = getFileFingerprint(exePath);
+    const asarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+    store.set('lastUpdateAttemptExeSize', exeFingerprint.size);
+    store.set('lastUpdateAttemptExeMtimeMs', exeFingerprint.mtimeMs);
+    store.set('lastUpdateAttemptAsarSha1Before', asarSha1 || '');
+  } catch {
+    clearBinaryAttemptFingerprint();
+  }
+}
+
+function hasBinaryFingerprintChange() {
+  const prevExeSize = Number(store.get('lastUpdateAttemptExeSize', 0)) || 0;
+  const prevExeMtime = Number(store.get('lastUpdateAttemptExeMtimeMs', 0)) || 0;
+  const prevAsarSha1 = String(store.get('lastUpdateAttemptAsarSha1Before', '') || '').trim().toLowerCase();
+  if (!prevExeSize && !prevExeMtime && !prevAsarSha1) return false;
+
+  let exeChanged = false;
+  try {
+    const exeFingerprint = getFileFingerprint(app.getPath('exe'));
+    exeChanged = !!(
+      prevExeSize > 0 &&
+      (exeFingerprint.size !== prevExeSize || Math.abs(exeFingerprint.mtimeMs - prevExeMtime) > 1000)
+    );
+  } catch {
+    exeChanged = false;
+  }
+
+  const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+  const asarChanged = !!(prevAsarSha1 && currentAsarSha1 && prevAsarSha1 !== currentAsarSha1);
+  return exeChanged || asarChanged;
+}
+
+function confirmBinaryUpdateByFingerprint(attemptMarker, logPrefix = 'UPDATE BIN fallback') {
+  const marker = String(attemptMarker || '').trim();
+  if (!marker) return false;
+  if (!hasBinaryFingerprintChange()) return false;
+  store.set('lastAppliedUpdateMarker', marker);
+  clearPendingUpdateAttempt();
+  appendFocusLog(`${logPrefix} confirmed marker by fingerprint: ${marker}`);
+  return true;
+}
+
 function clearPendingUpdateAttempt() {
   store.set('lastUpdateAttemptMarker', '');
   store.set('lastUpdateAttemptAt', 0);
   store.set('lastUpdateAttemptCount', 0);
   store.set('lastUpdateAttemptPatchPath', '');
   store.set('lastUpdateAttemptPatchSha1', '');
+  clearBinaryAttemptFingerprint();
 }
 
 function isReleaseApproved(payload) {
@@ -838,6 +910,7 @@ function buildInstallerApplyScript({ installerPath, statusPath, marker, exePath,
     '}',
     'try {',
     '  $payload = @{ ok = $ok; marker = $marker; mode = "setup"; restarted = $started; exitCode = $exitCode; error = [string]$errorMessage; restartError = [string]$restartError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
     '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
     '} catch {}'
   ].join(';');
@@ -921,6 +994,7 @@ function launchPortableSelfUpdater(downloadedExePath, statusFilePath, marker = '
       '}',
       'try {',
       '  $payload = @{ ok = $ok; marker = $marker; mode = "portable"; restarted = $started; error = [string]$errorMessage; restartError = [string]$restartError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+      '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
       '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
       '} catch {}'
     ].join(';');
@@ -1031,6 +1105,7 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '}',
     'try {',
     '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; restarted = $started; error = [string]$errorMessage; restartError = [string]$startError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
     '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
     '} catch {}'
   ].join(';');
@@ -1087,6 +1162,7 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
       'if(-not $launched){',
       '  try {',
       '    $payload = @{ ok = $false; marker = $marker; elevated = $true; launchFailed = $true; error = [string]$launchError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+      '    New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
       '    Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
       '  } catch {}',
       '  try {',
@@ -1181,7 +1257,22 @@ function consumeBinaryUpdateStatus() {
   try {
     const updatesDir = path.join(app.getPath('userData'), 'updates');
     const statusPath = path.join(updatesDir, UPDATE_STATUS_BINARY_FILE);
-    if (!fs.existsSync(statusPath)) return;
+    const attemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
+    const attemptAt = Number(store.get('lastUpdateAttemptAt', 0)) || 0;
+    const attemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
+    const attemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
+    const hasPendingBinaryAttempt = !!(attemptMarker && !attemptPatchPath && !attemptPatchSha1);
+    const isRecentBinaryAttempt = hasPendingBinaryAttempt && (Date.now() - attemptAt <= UPDATE_BINARY_FINGERPRINT_FALLBACK_MS);
+
+    if (!fs.existsSync(statusPath)) {
+      if (isRecentBinaryAttempt) {
+        const confirmedByFingerprint = confirmBinaryUpdateByFingerprint(attemptMarker, 'UPDATE BIN status-missing fallback');
+        if (!confirmedByFingerprint) {
+          appendFocusLog(`UPDATE BIN status missing and fingerprint unchanged for marker ${attemptMarker}`);
+        }
+      }
+      return;
+    }
 
     let payload = null;
     try {
@@ -1197,14 +1288,19 @@ function consumeBinaryUpdateStatus() {
       // ignore
     }
 
-    if (payload && payload.ok === true && payload.marker) {
-      const marker = String(payload.marker).trim();
+    if (payload && payload.ok === true) {
+      const marker = String(payload.marker || attemptMarker || '').trim();
       if (marker) {
         store.set('lastAppliedUpdateMarker', marker);
         clearPendingUpdateAttempt();
         appendFocusLog(`UPDATE BIN status confirmed marker: ${marker} mode=${String(payload.mode || 'setup')}`);
       }
       return;
+    }
+
+    if (isRecentBinaryAttempt) {
+      const confirmedByFingerprint = confirmBinaryUpdateByFingerprint(attemptMarker, 'UPDATE BIN status-failure fallback');
+      if (confirmedByFingerprint) return;
     }
 
     const reason = payload && (payload.error || payload.restartError || payload.exitCode !== undefined)
@@ -1635,6 +1731,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
       store.set('lastUpdateAttemptPatchPath', patchPath);
       store.set('lastUpdateAttemptPatchSha1', patchSha1);
+      clearBinaryAttemptFingerprint();
     }
     appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
     send({
@@ -1819,10 +1916,12 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     indeterminate: true,
     showProgress: true
   });
+  saveBinaryAttemptFingerprint();
   const launched = winUpdateMode === 'portable'
     ? launchPortableSelfUpdater(installerPath, statusPath, latestMarker, { launcherPid: process.pid })
     : launchInstaller(installerPath, statusPath, latestMarker, { launcherPid: process.pid });
   if (!launched) {
+    clearBinaryAttemptFingerprint();
     appendFocusLog(`UPDATE Could not launch installer ${installerPath}`);
     send({
       text: 'No se pudo iniciar el instalador.',
