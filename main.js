@@ -1167,16 +1167,22 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
   const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
   const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || sha1File(lastAttemptPatchPath)).toLowerCase();
+  const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
   const hasUnknownAttemptHash = !!(
     attemptPatchReferenceSha1 &&
     !currentAsarSha1
+  );
+  const hasPendingAsarAttempt = !!(
+    hasMarkerUpdate &&
+    latestMarker &&
+    lastAttemptMarker === latestMarker &&
+    (lastAttemptPatchPath || attemptPatchReferenceSha1)
   );
   const hasAttemptHashMismatch = !!(
     attemptPatchReferenceSha1 &&
     currentAsarSha1 &&
     attemptPatchReferenceSha1 !== currentAsarSha1
   );
-  const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
 
   if (!hasVersionUpdate && !hasMarkerUpdate) {
     appendFocusLog(`UPDATE Up to date (${current})`);
@@ -1193,7 +1199,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     lastAttemptMarker === latestMarker &&
     Date.now() - lastAttemptAt < 5 * 60 * 1000 &&
     !hasAttemptHashMismatch &&
-    !hasUnknownAttemptHash
+    !hasUnknownAttemptHash &&
+    !hasPendingAsarAttempt
   ) {
     appendFocusLog(`UPDATE Recent attempt detected for marker ${latestMarker}; skipping to avoid restart loop`);
     send({
