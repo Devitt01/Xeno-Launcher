@@ -1073,6 +1073,13 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '    Start-Sleep -Milliseconds 250',
     '  }',
     '}',
+    'if($ok){',
+    '  try {',
+    '    $prePayload = @{ ok = $true; marker = $marker; elevated = $elevated; preStart = $true; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '    New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
+    '    Set-Content -LiteralPath $status -Value $prePayload -Encoding UTF8 -Force',
+    '  } catch {}',
+    '}',
     'Start-Sleep -Milliseconds 250',
     '$started=$false',
     '$startError=""',
@@ -1507,6 +1514,23 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       indeterminate: false
     });
     return { skipped: true, reason: 'recent_attempt' };
+  }
+  if (
+    hasMarkerUpdate &&
+    latestMarker &&
+    lastAttemptMarker === latestMarker &&
+    hasUnknownAttemptHash &&
+    Date.now() - lastAttemptAt < 90 * 1000
+  ) {
+    appendFocusLog(`UPDATE Pending ASAR verification for marker ${latestMarker}; waiting before retry`);
+    send({
+      text: 'Verificando parche aplicado recientemente. Continuando launcher...',
+      phase: 'up-to-date',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { skipped: true, reason: 'pending_verification' };
   }
   if (hasMarkerUpdate && latestMarker && lastAttemptMarker === latestMarker && hasAttemptHashMismatch) {
     appendFocusLog(`UPDATE Retry enabled for marker ${latestMarker}: detected ASAR hash mismatch`);
