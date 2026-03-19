@@ -11,7 +11,7 @@ try {
 }
 const https = require('https');
 const http = require('http');
-const { execFile, execSync, spawn } = require('child_process');
+const { execFile, execFileSync, execSync, spawn } = require('child_process');
 const Store = require('electron-store');
 const { Client } = require('minecraft-launcher-core');
 let autoUpdater = null;
@@ -89,6 +89,7 @@ const store = new Store({
     lastUpdateAttemptMarker: '',
     lastUpdateAttemptAt: 0,
     lastUpdateAttemptCount: 0,
+    lastUpdateAttemptNeedsRetry: false,
     lastUpdateAttemptPatchPath: '',
     lastUpdateAttemptPatchSha1: '',
     lastUpdateAttemptExeSize: 0,
@@ -630,6 +631,49 @@ function sha256File(filePath) {
   }
 }
 
+function readWindowsFileHash(filePath, algorithm = 'sha1') {
+  if (process.platform !== 'win32') return '';
+  try {
+    const full = path.resolve(String(filePath || '').trim());
+    if (!full || !fs.existsSync(full)) return '';
+    const normalizedAlgorithm = String(algorithm || 'sha1').trim().toUpperCase();
+    if (!['SHA1', 'SHA256'].includes(normalizedAlgorithm)) return '';
+    const script = [
+      `$target=${psQuote(full)}`,
+      '$hash=""',
+      'if(Test-Path -LiteralPath $target){',
+      '  try {',
+      `    $hash = (Get-FileHash -LiteralPath $target -Algorithm ${normalizedAlgorithm}).Hash`,
+      '  } catch {',
+      '    $hash = ""',
+      '  }',
+      '}',
+      '$hash'
+    ].join(';');
+    const output = execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script
+    ], {
+      windowsHide: true,
+      encoding: 'utf8',
+      timeout: 8000
+    });
+    const hash = String(output || '').trim().toLowerCase();
+    return /^[a-f0-9]{40}$|^[a-f0-9]{64}$/.test(hash) ? hash : '';
+  } catch {
+    return '';
+  }
+}
+
+function readFileSha1(filePath) {
+  const direct = sha1File(filePath).toLowerCase();
+  if (direct) return direct;
+  return readWindowsFileHash(filePath, 'sha1').toLowerCase();
+}
+
 function parseSha256FromText(text) {
   const value = String(text || '').trim();
   if (!value) return '';
@@ -680,7 +724,7 @@ function waitMs(ms) {
 async function readCurrentAsarSha1WithRetry(maxAttempts = 24, delayMs = 250) {
   const attempts = Math.max(1, Number(maxAttempts) || 1);
   for (let i = 0; i < attempts; i += 1) {
-    const hash = sha1File(getCurrentAppAsarPath()).toLowerCase();
+    const hash = readFileSha1(getCurrentAppAsarPath()).toLowerCase();
     if (hash) return hash;
     if (i < attempts - 1) {
       await waitMs(delayMs);
@@ -715,7 +759,7 @@ function saveBinaryAttemptFingerprint() {
   try {
     const exePath = app.getPath('exe');
     const exeFingerprint = getFileFingerprint(exePath);
-    const asarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+    const asarSha1 = readFileSha1(getCurrentAppAsarPath()).toLowerCase();
     store.set('lastUpdateAttemptExeSize', exeFingerprint.size);
     store.set('lastUpdateAttemptExeMtimeMs', exeFingerprint.mtimeMs);
     store.set('lastUpdateAttemptAsarSha1Before', asarSha1 || '');
@@ -741,7 +785,7 @@ function hasBinaryFingerprintChange() {
     exeChanged = false;
   }
 
-  const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+  const currentAsarSha1 = readFileSha1(getCurrentAppAsarPath()).toLowerCase();
   const asarChanged = !!(prevAsarSha1 && currentAsarSha1 && prevAsarSha1 !== currentAsarSha1);
   return exeChanged || asarChanged;
 }
@@ -760,6 +804,7 @@ function clearPendingUpdateAttempt() {
   store.set('lastUpdateAttemptMarker', '');
   store.set('lastUpdateAttemptAt', 0);
   store.set('lastUpdateAttemptCount', 0);
+  store.set('lastUpdateAttemptNeedsRetry', false);
   store.set('lastUpdateAttemptPatchPath', '');
   store.set('lastUpdateAttemptPatchSha1', '');
   clearBinaryAttemptFingerprint();
@@ -1018,14 +1063,15 @@ function launchInstaller(installerPath, statusFilePath, marker = '', options = {
       exePath,
       launcherPid
     });
+    const encodedScript = psEncode(script);
     return spawnDetached('powershell.exe', [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
       '-WindowStyle',
       'Hidden',
-      '-Command',
-      script
+      '-EncodedCommand',
+      encodedScript
     ]);
   } catch {
     return false;
@@ -1092,14 +1138,15 @@ function launchPortableSelfUpdater(downloadedExePath, statusFilePath, marker = '
       '} catch {}'
     ].join(';');
 
+    const encodedScript = psEncode(script);
     return spawnDetached('powershell.exe', [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
       '-WindowStyle',
       'Hidden',
-      '-Command',
-      script
+      '-EncodedCommand',
+      encodedScript
     ]);
   } catch {
     return false;
@@ -1116,7 +1163,7 @@ function getCurrentAppAsarPath() {
   }
 }
 
-function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, elevated, launcherPid }) {
+function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, elevated, launcherPid, expectedSha1 }) {
   const elevatedLiteral = elevated ? '$true' : '$false';
   const launcherPidValue = Number.isFinite(Number(launcherPid)) ? Math.max(0, Math.trunc(Number(launcherPid))) : 0;
   return [
@@ -1128,13 +1175,34 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     `$marker=${psQuote(String(marker || ''))}`,
     `$elevated=${elevatedLiteral}`,
     `$launcherPid=${launcherPidValue}`,
+    `$expectedSha1=${psQuote(String(expectedSha1 || '').toLowerCase())}`,
     '$ok=$false',
     '$errorMessage=""',
+    '$appliedSha1=""',
     'for($i=0;$i -lt 120;$i++){',
     '  try {',
     '    if(Test-Path -LiteralPath $bak){ Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }',
     '    if(Test-Path -LiteralPath $dst){ Move-Item -LiteralPath $dst -Destination $bak -Force }',
     '    Copy-Item -LiteralPath $src -Destination $dst -Force',
+    '    try {',
+    '      $appliedSha1 = (Get-FileHash -LiteralPath $dst -Algorithm SHA1).Hash.ToLowerInvariant()',
+    '    } catch {',
+    '      $appliedSha1 = ""',
+    '    }',
+    '    if($expectedSha1 -and (-not $appliedSha1)){',
+    '      $errorMessage = "SHA1 post-apply unavailable."',
+    '      if(Test-Path -LiteralPath $dst){ Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue }',
+    '      if((Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){ try { Move-Item -LiteralPath $bak -Destination $dst -Force } catch {} }',
+    '      Start-Sleep -Milliseconds 450',
+    '      continue',
+    '    }',
+    '    if($expectedSha1 -and $appliedSha1 -and $appliedSha1 -ne $expectedSha1){',
+    '      $errorMessage = "SHA1 mismatch after apply ($appliedSha1 != $expectedSha1)"',
+    '      if(Test-Path -LiteralPath $dst){ Remove-Item -LiteralPath $dst -Force -ErrorAction SilentlyContinue }',
+    '      if((Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){ try { Move-Item -LiteralPath $bak -Destination $dst -Force } catch {} }',
+    '      Start-Sleep -Milliseconds 450',
+    '      continue',
+    '    }',
     '    $ok=$true',
     '    break',
     '  } catch {',
@@ -1156,13 +1224,11 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '    Start-Sleep -Milliseconds 250',
     '  }',
     '}',
-    'if($ok){',
-    '  try {',
-    '    $prePayload = @{ ok = $true; marker = $marker; elevated = $elevated; preStart = $true; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
-    '    New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
-    '    Set-Content -LiteralPath $status -Value $prePayload -Encoding UTF8 -Force',
-    '  } catch {}',
-    '}',
+    'try {',
+    '  $prePayload = @{ ok = $ok; marker = $marker; elevated = $elevated; preStart = $true; expectedSha1 = [string]$expectedSha1; appliedSha1 = [string]$appliedSha1; dst = [string]$dst; error = [string]$errorMessage; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
+    '  Set-Content -LiteralPath $status -Value $prePayload -Encoding UTF8 -Force',
+    '} catch {}',
     'Start-Sleep -Milliseconds 250',
     '$started=$false',
     '$startError=""',
@@ -1204,7 +1270,7 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '  }',
     '}',
     'try {',
-    '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; restarted = $started; error = [string]$errorMessage; restartError = [string]$startError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; restarted = $started; expectedSha1 = [string]$expectedSha1; appliedSha1 = [string]$appliedSha1; dst = [string]$dst; error = [string]$errorMessage; restartError = [string]$startError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
     '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
     '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
     '} catch {}'
@@ -1218,6 +1284,7 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
     const exe = path.resolve(app.getPath('exe'));
     const statusPath = path.resolve(String(statusFilePath || '').trim());
     const elevate = !!(options && options.elevate === true);
+    const expectedSha1 = String(options && options.expectedSha1 ? options.expectedSha1 : '').trim().toLowerCase();
     const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
     if (!src || !dst || !exe || !statusPath || src.toLowerCase() === dst.toLowerCase()) return false;
     const backup = `${dst}.bak`;
@@ -1229,9 +1296,11 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
       statusPath,
       marker,
       elevated: elevate,
-      launcherPid
+      launcherPid,
+      expectedSha1
     });
 
+    const encodedApplyScript = psEncode(applyScript);
     if (!elevate) {
       return spawnDetached('powershell.exe', [
         '-NoProfile',
@@ -1239,12 +1308,10 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
         'Bypass',
         '-WindowStyle',
         'Hidden',
-        '-Command',
-        applyScript
+        '-EncodedCommand',
+        encodedApplyScript
       ]);
     }
-
-    const encodedApplyScript = psEncode(applyScript);
     const bootstrapScript = [
       `$status=${psQuote(statusPath)}`,
       `$marker=${psQuote(String(marker || ''))}`,
@@ -1271,14 +1338,15 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
       '}'
     ].join(';');
 
+    const encodedBootstrapScript = psEncode(bootstrapScript);
     return spawnDetached('powershell.exe', [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
       '-WindowStyle',
       'Hidden',
-      '-Command',
-      bootstrapScript
+      '-EncodedCommand',
+      encodedBootstrapScript
     ]);
   } catch {
     return false;
@@ -1292,8 +1360,8 @@ function confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPa
   if (!marker) return false;
 
   const currentAsarPath = getCurrentAppAsarPath();
-  const currentAsarSha1 = sha1File(currentAsarPath).toLowerCase();
-  const patchSha1 = (patchSha1Value || sha1File(patchPathValue)).toLowerCase();
+  const currentAsarSha1 = readFileSha1(currentAsarPath).toLowerCase();
+  const patchSha1 = (patchSha1Value || readFileSha1(patchPathValue)).toLowerCase();
   if (!currentAsarSha1 || !patchSha1 || currentAsarSha1 !== patchSha1) return false;
 
   store.set('lastAppliedUpdateMarker', marker);
@@ -1311,7 +1379,8 @@ function consumeAsarUpdateStatus() {
     const attemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
 
     if (!fs.existsSync(statusPath)) {
-      confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR fallback');
+      if (confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR fallback')) return;
+      if (attemptMarker) appendFocusLog(`UPDATE ASAR status file missing after relaunch for marker ${attemptMarker}`);
       return;
     }
 
@@ -1332,20 +1401,31 @@ function consumeAsarUpdateStatus() {
     if (payload && payload.ok === true && payload.marker) {
       const marker = String(payload.marker).trim();
       if (marker) {
+        const expectedSha1 = String(payload.expectedSha1 || '').trim().toLowerCase();
+        const appliedSha1 = String(payload.appliedSha1 || '').trim().toLowerCase();
+        if (expectedSha1 && appliedSha1 && expectedSha1 !== appliedSha1) {
+          store.set('lastUpdateAttemptAt', Date.now());
+          store.set('lastUpdateAttemptNeedsRetry', true);
+          appendFocusLog(`UPDATE ASAR status hash mismatch after apply: expected=${expectedSha1} actual=${appliedSha1}`);
+          return;
+        }
         store.set('lastAppliedUpdateMarker', marker);
         clearPendingUpdateAttempt();
-        appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker} elevated=${payload.elevated === true ? 'yes' : 'no'}`);
+        appendFocusLog(`UPDATE ASAR status confirmed marker: ${marker} elevated=${payload.elevated === true ? 'yes' : 'no'} sha1=${appliedSha1 || '<unknown>'}`);
       }
     } else {
       if (confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR status fallback')) return;
       store.set('lastUpdateAttemptAt', Date.now());
+      store.set('lastUpdateAttemptNeedsRetry', true);
       const reason = payload && (payload.error || payload.restartError)
         ? String(payload.error || payload.restartError)
         : '';
+      const expectedSha1 = payload ? String(payload.expectedSha1 || '').trim().toLowerCase() : '';
+      const appliedSha1 = payload ? String(payload.appliedSha1 || '').trim().toLowerCase() : '';
       if (reason) {
-        appendFocusLog(`UPDATE ASAR status indicates failure: ${reason}`);
+        appendFocusLog(`UPDATE ASAR status indicates failure: ${reason} expected=${expectedSha1 || '<none>'} actual=${appliedSha1 || '<none>'}`);
       } else {
-        appendFocusLog('UPDATE ASAR status indicates failure');
+        appendFocusLog(`UPDATE ASAR status indicates failure expected=${expectedSha1 || '<none>'} actual=${appliedSha1 || '<none>'}`);
       }
     }
   } catch {
@@ -1700,10 +1780,11 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const lastAttemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
   const lastAttemptAt = Number(store.get('lastUpdateAttemptAt', 0)) || 0;
   const lastAttemptCount = Number(store.get('lastUpdateAttemptCount', 0)) || 0;
+  const lastAttemptNeedsRetry = !!store.get('lastUpdateAttemptNeedsRetry', false);
   const lastAttemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
   const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
-  let currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
-  const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || sha1File(lastAttemptPatchPath)).toLowerCase();
+  let currentAsarSha1 = readFileSha1(getCurrentAppAsarPath()).toLowerCase();
+  const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || readFileSha1(lastAttemptPatchPath)).toLowerCase();
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
   const sameVersionMarkerUpdate = !!(!hasVersionUpdate && hasMarkerUpdate);
   const hasPendingAsarAttempt = !!(
@@ -1789,6 +1870,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     latestMarker &&
     lastAttemptMarker === latestMarker &&
     hasUnknownAttemptHash &&
+    !lastAttemptNeedsRetry &&
     Date.now() - lastAttemptAt < 90 * 1000
   ) {
     appendFocusLog(`UPDATE Pending ASAR verification for marker ${latestMarker}; waiting before retry`);
@@ -1806,6 +1888,9 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   }
   if (hasMarkerUpdate && latestMarker && lastAttemptMarker === latestMarker && hasUnknownAttemptHash) {
     appendFocusLog(`UPDATE Retry enabled for marker ${latestMarker}: current ASAR hash unavailable`);
+  }
+  if (hasMarkerUpdate && latestMarker && lastAttemptMarker === latestMarker && lastAttemptNeedsRetry) {
+    appendFocusLog(`UPDATE Retry forced by ASAR updater status for marker ${latestMarker}`);
   }
 
   if (hasVersionUpdate) {
@@ -2113,6 +2198,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
       const launched = launchAsarSelfUpdater(patchPath, statusPath, latestMarker, {
         elevate: asarNeedsElevation,
+        expectedSha1: patchSha1,
         launcherPid: process.pid
       });
       if (!launched) {
@@ -2143,6 +2229,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
           store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
           store.set('lastUpdateAttemptPatchPath', patchPath);
           store.set('lastUpdateAttemptPatchSha1', patchSha1);
+          store.set('lastUpdateAttemptNeedsRetry', false);
           clearBinaryAttemptFingerprint();
         }
         appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
@@ -2354,6 +2441,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
     store.set('lastUpdateAttemptPatchPath', '');
     store.set('lastUpdateAttemptPatchSha1', '');
+    store.set('lastUpdateAttemptNeedsRetry', false);
   }
   send({
     text: winUpdateMode === 'portable'
