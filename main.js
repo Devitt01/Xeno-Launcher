@@ -172,6 +172,7 @@ const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
 const UPDATE_STATUS_ASAR_FILE = 'asar-update-status.json';
 const UPDATE_STATUS_BINARY_FILE = 'binary-update-status.json';
 const UPDATE_BINARY_FINGERPRINT_FALLBACK_MS = 30 * 60 * 1000;
+const UPDATE_SAME_VERSION_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
 
 const addonCache = {
@@ -521,6 +522,17 @@ function getUpdateSourceLabel() {
   return repo ? `github:${repo}` : '';
 }
 
+function parseAssetDigest(rawDigest) {
+  const text = String(rawDigest || '').trim();
+  if (!text) return { algorithm: '', value: '' };
+  const match = text.match(/^([a-z0-9_-]+):([a-fA-F0-9]+)$/);
+  if (!match) return { algorithm: '', value: '' };
+  return {
+    algorithm: String(match[1] || '').toLowerCase(),
+    value: String(match[2] || '').toLowerCase()
+  };
+}
+
 function normalizeReleaseAssets(assets) {
   if (!Array.isArray(assets)) return [];
   return assets
@@ -528,12 +540,22 @@ function normalizeReleaseAssets(assets) {
       const name = String(item && item.name ? item.name : '').trim();
       const url = String(item && (item.browser_download_url || item.url) ? (item.browser_download_url || item.url) : '').trim();
       if (!name || !url) return null;
+
+      const parsedDigest = parseAssetDigest(item && item.digest ? item.digest : '');
+      const explicitSha256 = String(item && item.sha256 ? item.sha256 : '').trim().toLowerCase();
+      const explicitSha512 = String(item && item.sha512 ? item.sha512 : '').trim().toLowerCase();
+      const sha256 = explicitSha256 || (parsedDigest.algorithm === 'sha256' ? parsedDigest.value : '');
+      const sha512 = explicitSha512 || (parsedDigest.algorithm === 'sha512' ? parsedDigest.value : '');
+
       return {
         id: Number(item && item.id ? item.id : 0) || 0,
         name,
         url,
         size: Number(item && item.size ? item.size : 0) || 0,
-        updatedAt: String(item && (item.updated_at || item.created_at || '') ? (item.updated_at || item.created_at || '') : '').trim()
+        updatedAt: String(item && (item.updated_at || item.created_at || '') ? (item.updated_at || item.created_at || '') : '').trim(),
+        digest: parsedDigest.algorithm && parsedDigest.value ? `${parsedDigest.algorithm}:${parsedDigest.value}` : '',
+        sha256,
+        sha512
       };
     })
     .filter(Boolean);
@@ -593,6 +615,58 @@ function sha1File(filePath) {
     const data = fs.readFileSync(full);
     return crypto.createHash('sha1').update(data).digest('hex');
   } catch {
+    return '';
+  }
+}
+
+function sha256File(filePath) {
+  try {
+    const full = path.resolve(String(filePath || '').trim());
+    if (!full || !fs.existsSync(full)) return '';
+    const data = fs.readFileSync(full);
+    return crypto.createHash('sha256').update(data).digest('hex');
+  } catch {
+    return '';
+  }
+}
+
+function parseSha256FromText(text) {
+  const value = String(text || '').trim();
+  if (!value) return '';
+  const prefixed = value.match(/sha256\s*[:=]\s*([a-f0-9]{64})/i);
+  if (prefixed && prefixed[1]) return String(prefixed[1]).toLowerCase();
+  const plain = value.match(/\b([a-f0-9]{64})\b/i);
+  if (plain && plain[1]) return String(plain[1]).toLowerCase();
+  return '';
+}
+
+function selectChecksumAssetForTarget(assets, targetName) {
+  if (!Array.isArray(assets) || !targetName) return null;
+  const base = String(targetName).trim();
+  if (!base) return null;
+  const normalizedBase = base.toLowerCase();
+  const candidates = [
+    normalizedBase + '.sha256',
+    normalizedBase + '.sha256.txt',
+    path.basename(normalizedBase) + '.sha256',
+    path.basename(normalizedBase) + '.sha256.txt'
+  ];
+  return assets.find((asset) => candidates.includes(String(asset && asset.name ? asset.name : '').toLowerCase())) || null;
+}
+
+async function resolveAssetSha256FromReleaseAssets(assets, targetAsset) {
+  if (!targetAsset || typeof targetAsset !== 'object') return '';
+  const explicit = String(targetAsset.sha256 || '').trim().toLowerCase();
+  if (/^[a-f0-9]{64}$/.test(explicit)) return explicit;
+
+  const checksumAsset = selectChecksumAssetForTarget(assets, targetAsset.name || '');
+  if (!checksumAsset || !checksumAsset.url) return '';
+
+  try {
+    const checksumText = await fetchText(checksumAsset.url, 2);
+    return parseSha256FromText(checksumText);
+  } catch (err) {
+    appendFocusLog('UPDATE checksum asset fetch failed (' + checksumAsset.name + '): ' + String(err));
     return '';
   }
 }
@@ -1631,6 +1705,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   let currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
   const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || sha1File(lastAttemptPatchPath)).toLowerCase();
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
+  const sameVersionMarkerUpdate = !!(!hasVersionUpdate && hasMarkerUpdate);
   const hasPendingAsarAttempt = !!(
     hasMarkerUpdate &&
     latestMarker &&
@@ -1670,6 +1745,24 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     }
     send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
     return { upToDate: true };
+  }
+
+  if (
+    sameVersionMarkerUpdate &&
+    latestMarker &&
+    lastAttemptMarker === latestMarker &&
+    lastAttemptCount >= 2 &&
+    Date.now() - lastAttemptAt < UPDATE_SAME_VERSION_RETRY_COOLDOWN_MS
+  ) {
+    appendFocusLog(`UPDATE Same-version retry cooldown active for marker ${latestMarker}`);
+    send({
+      text: 'Parche pendiente. Reintentaremos automaticamente mas tarde para evitar bucle.',
+      phase: 'up-to-date',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { skipped: true, reason: 'same_version_retry_cooldown' };
   }
 
   if (
@@ -1760,7 +1853,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
   appendFocusLog(`UPDATE Strategy=${UPDATE_STRATEGY}`);
   const asarAsset = selectAsarUpdateAsset(latest.assets);
-  const hasSameVersionPatch = !!(!hasVersionUpdate && hasMarkerUpdate && asarAsset);
+  const hasSameVersionPatch = !!(sameVersionMarkerUpdate && asarAsset);
   const preferAsarFlow = UPDATE_STRATEGY === 'asar'
     || UPDATE_STRATEGY === 'auto'
     || (UPDATE_STRATEGY === 'binary' && hasSameVersionPatch);
@@ -1782,12 +1875,17 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   );
   const shouldUseBinaryRecovery = !!(
     UPDATE_ENABLE_BINARY_RECOVERY &&
+    !sameVersionMarkerUpdate &&
     isRetrySameMarker &&
     lastAttemptCount >= UPDATE_BINARY_RECOVERY_ATTEMPTS
   );
-  const allowBinaryFallback = UPDATE_ALLOW_BINARY_FALLBACK || shouldUseBinaryRecovery || UPDATE_STRATEGY === 'binary';
+  const allowBinaryFallbackBase = UPDATE_ALLOW_BINARY_FALLBACK || shouldUseBinaryRecovery || UPDATE_STRATEGY === 'binary';
+  const allowBinaryFallback = sameVersionMarkerUpdate ? false : allowBinaryFallbackBase;
   if (shouldUseBinaryRecovery) {
     appendFocusLog(`UPDATE Binary recovery enabled for marker ${latestMarker} after ${lastAttemptCount} failed ASAR attempts`);
+  }
+  if (sameVersionMarkerUpdate && allowBinaryFallbackBase) {
+    appendFocusLog('UPDATE Binary fallback disabled for same-version patch strategy');
   }
   if (!hasVersionUpdate && hasMarkerUpdate && !asarAsset) {
     appendFocusLog('UPDATE Same-version release without ASAR patch; binary same-version update skipped');
@@ -1965,6 +2063,41 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
         indeterminate: true,
         showProgress: true
       });
+    }
+
+    if (!asarFailedButCanFallback) {
+      const expectedAsarSha256 = await resolveAssetSha256FromReleaseAssets(latest.assets, asarAsset);
+      if (expectedAsarSha256) {
+        const downloadedSha256 = sha256File(patchPath);
+        if (!downloadedSha256 || downloadedSha256 !== expectedAsarSha256) {
+          const errMsg = 'SHA256 mismatch (expected ' + expectedAsarSha256 + ', got ' + (downloadedSha256 || '<empty>') + ')';
+          appendFocusLog('UPDATE ASAR checksum failed: ' + errMsg);
+          if (allowBinaryFallback) {
+            asarFailedButCanFallback = true;
+            appendFocusLog('UPDATE ASAR checksum failed; falling back to binary installer');
+            send({
+              text: 'Parche ASAR no paso la verificacion SHA256. Intentando instalador del launcher...',
+              phase: 'checking',
+              showProgress: true,
+              progress: null,
+              indeterminate: true
+            });
+          } else {
+            send({
+              text: 'El parche descargado no paso verificacion SHA256. Continuando...',
+              phase: 'error',
+              showProgress: false,
+              progress: null,
+              indeterminate: false
+            });
+            return { updateAvailable: true, failed: true, error: errMsg };
+          }
+        } else {
+          appendFocusLog('UPDATE ASAR checksum verified sha256=' + downloadedSha256);
+        }
+      } else {
+        appendFocusLog('UPDATE ASAR checksum not available (proceeding with local validations only)');
+      }
     }
 
     if (!asarFailedButCanFallback) {
@@ -4696,7 +4829,4 @@ ipcMain.on('launch-game', async (event, instanceId) => {
       event.sender.send('launch-error', err ? `${String(err)}${details}` : `Error al iniciar.${details}`);
     });
 });
-
-
-
 

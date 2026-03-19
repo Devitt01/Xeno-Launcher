@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 function readPackageVersion(rootDir) {
   const pkgPath = path.join(rootDir, 'package.json');
@@ -55,6 +56,11 @@ function newestSourceMtime(rootDir) {
   return newest;
 }
 
+function computeFileHash(filePath, algorithm) {
+  const data = fs.readFileSync(filePath);
+  return crypto.createHash(algorithm).update(data).digest('hex');
+}
+
 function main() {
   const rootDir = process.cwd();
   const version = readPackageVersion(rootDir);
@@ -77,9 +83,15 @@ function main() {
   fs.copyFileSync(sourceAsar, targetAsar);
 
   const stats = fs.statSync(targetAsar);
+  const sha256 = computeFileHash(targetAsar, 'sha256');
+  const checksumPath = `${targetAsar}.sha256`;
+  fs.writeFileSync(checksumPath, `${sha256}  ${path.basename(targetAsar)}\n`, 'utf8');
+
   console.log(`[build:asar-asset] Output: ${outputDir}`);
   console.log(`[build:asar-asset] Archivo creado: ${targetAsar}`);
   console.log(`[build:asar-asset] Tamano: ${formatSize(stats.size)}`);
+  console.log(`[build:asar-asset] SHA256: ${sha256}`);
+  console.log(`[build:asar-asset] Checksum file: ${checksumPath}`);
 }
 
 try {
@@ -88,4 +100,3 @@ try {
   console.error(`[build:asar-asset] Error: ${err.message || String(err)}`);
   process.exitCode = 1;
 }
-

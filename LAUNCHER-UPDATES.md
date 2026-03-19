@@ -2,64 +2,66 @@
 
 ## ES (Espanol)
 
-### Flujo oficial (sin cambiar version)
-- El launcher usa por defecto `legacy + asar`.
-- Esto permite publicar parches pequenos sin subir de `1.0.0` a `1.0.1`.
-- El splash detecta cambios de build por marcador/hash del asset y aplica el parche.
+### Base del sistema (estilo produccion)
+- Motor por defecto: `legacy + asar` (no requiere subir a `1.0.1` para parches chicos).
+- Verificacion de integridad: el launcher valida `SHA256` del parche `.asar` si existe digest en release o archivo `.sha256`.
+- Anti-loop: para parches de misma version, se desactiva fallback binario automatico y se aplica cooldown de reintentos.
+- Rollout controlado: se mantiene el gate de aprobacion (`XENO_PUBLIC_UPDATE`) para publicar cuando tu quieras.
 
 ### Defaults actuales
 - `XENO_UPDATE_ENGINE=legacy` (default)
 - `XENO_UPDATE_STRATEGY=asar` (default)
 - `XENO_UPDATE_MODE=auto` (default)
 
-### Que debes subir para un parche pequeno
-1. Genera el asset del app:
+### Publicar un parche pequeno (misma version)
+1. Genera el asset:
 ```bash
 npm run build:asar-asset
 ```
-2. Sube a la release de GitHub el archivo:
+2. Sube a la release estos dos archivos:
 - `XenoLauncher-App-1.0.0.asar`
+- `XenoLauncher-App-1.0.0.asar.sha256`
 
-Con eso, la app instalada puede actualizarse sin cambiar version.
+Con eso, los clientes actualizan sin cambiar a `1.0.1`.
+
+### Recomendacion fuerte
+- No reescribas assets ya publicados en una release en produccion.
+- Publica nuevos assets/builds de forma inmutable para evitar estados inconsistentes entre usuarios.
 
 ### Binarios (setup/portable)
-- `XenoLauncher-Setup-1.0.0.exe` y `XenoLauncher-Portable-1.0.0.exe` son para reinstalacion/manual.
-- No son necesarios para un parche pequeno de codigo si ya publicaste el `.asar`.
-
-### Modo alterno (requiere cambiar version)
-- Solo si lo activas manualmente:
-- `XENO_UPDATE_ENGINE=electron`
-- Ese modo usa `electron-updater` y si requiere version nueva (`1.0.1`, etc).
+- `XenoLauncher-Setup-1.0.0.exe` y `XenoLauncher-Portable-1.0.0.exe` quedan para reinstalacion/manual.
+- En parches de misma version, el flujo principal debe ser `.asar`.
 
 ---
 
 ## EN (English)
 
-### Official flow (no version bump)
-- The launcher now defaults to `legacy + asar`.
-- This allows small patches without bumping from `1.0.0` to `1.0.1`.
-- Splash detects build changes from release asset marker/hash and applies the patch.
+### Production-style baseline
+- Default engine: `legacy + asar` (no need to bump to `1.0.1` for small patches).
+- Integrity verification: launcher validates patch `SHA256` when release digest or `.sha256` sidecar exists.
+- Anti-loop: for same-version patches, automatic binary fallback is disabled and retry cooldown is applied.
+- Controlled rollout: approval gate (`XENO_PUBLIC_UPDATE`) remains in place.
 
 ### Current defaults
 - `XENO_UPDATE_ENGINE=legacy` (default)
 - `XENO_UPDATE_STRATEGY=asar` (default)
 - `XENO_UPDATE_MODE=auto` (default)
 
-### What to upload for a small patch
-1. Build the app asset:
+### Publish a small patch (same version)
+1. Build asset:
 ```bash
 npm run build:asar-asset
 ```
-2. Upload this file to the GitHub release:
+2. Upload both files to the release:
 - `XenoLauncher-App-1.0.0.asar`
+- `XenoLauncher-App-1.0.0.asar.sha256`
 
-Installed apps can update without changing version.
+Clients can update without moving to `1.0.1`.
+
+### Strong recommendation
+- Do not overwrite already-published assets in production releases.
+- Publish immutable build artifacts to avoid inconsistent client states.
 
 ### Binary artifacts (setup/portable)
-- `XenoLauncher-Setup-1.0.0.exe` and `XenoLauncher-Portable-1.0.0.exe` are for reinstall/manual usage.
-- They are not required for a small code patch when `.asar` patching is used.
-
-### Alternate mode (requires version bump)
-- Only if manually enabled:
-- `XENO_UPDATE_ENGINE=electron`
-- This uses `electron-updater` and needs a higher app version (`1.0.1`, etc).
+- `XenoLauncher-Setup-1.0.0.exe` and `XenoLauncher-Portable-1.0.0.exe` remain for reinstall/manual use.
+- For same-version patches, `.asar` should be the primary path.
