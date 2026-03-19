@@ -1,141 +1,65 @@
-﻿# Xeno Launcher Updates
+# Xeno Launcher Updates
 
 ## ES (Espanol)
 
-### Objetivo
-- Los usuarios actualizan desde el splash, sin descargar manualmente setup/portable.
-- **No se publica ni se activa update global sin tu permiso.**
+### Flujo oficial (sin cambiar version)
+- El launcher usa por defecto `legacy + asar`.
+- Esto permite publicar parches pequenos sin subir de `1.0.0` a `1.0.1`.
+- El splash detecta cambios de build por marcador/hash del asset y aplica el parche.
 
-### Como funciona ahora
-Al iniciar (si `XENO_UPDATE_MODE=auto`), el launcher busca updates y aplica este orden:
+### Defaults actuales
+- `XENO_UPDATE_ENGINE=legacy` (default)
+- `XENO_UPDATE_STRATEGY=asar` (default)
+- `XENO_UPDATE_MODE=auto` (default)
 
-0. Fuente de update (prioridad):
-   - `XENO_UPDATE_MANIFEST_URL`
-   - `XENO_UPDATE_REPO`
-   - `build.publish` (provider github) en `package.json`
-   - `repository` en `package.json`
-1. **Setup/Portable (preferido por defecto)**
-   - Estrategia default: `XENO_UPDATE_STRATEGY=binary`.
-   - Usa `Setup` para instalaciones normales y `Portable` para runtime portable.
-   - Aplica update y reinicia el launcher automaticamente.
-2. Parche ASAR (opcional)
-   - Solo se usa como principal si configuras `XENO_UPDATE_STRATEGY=asar` o `auto`.
-   - En `auto`, intenta ASAR y puede recuperar con binario si detecta fallos repetidos.
-
-### Bloqueo de rollout (permiso manual)
-Por defecto, la app **no aplica** una release nueva para usuarios si no esta aprobada.
-
-Aprobacion por token:
-- Token default: `XENO_PUBLIC_UPDATE`
-- La release queda aprobada si ese token aparece en:
-  - titulo de release, o
-  - tag, o
-  - descripcion/body.
-
-Si el token no aparece:
-- Los usuarios ven la app normal (no se actualizan).
-- El log marca que la build fue bloqueada por aprobacion.
-
-Override solo para pruebas locales del owner:
-```powershell
-$env:XENO_UPDATE_ALLOW_UNAPPROVED="true"
-npm start
-```
-
-### Variables utiles
-- `XENO_UPDATE_MODE=auto|manual`
-- `XENO_UPDATE_STRATEGY=binary|asar|auto` (default: `binary`)
-- `XENO_UPDATE_REQUIRE_APPROVAL=true|false` (default: `true`)
-- `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
-- `XENO_UPDATE_ALLOW_UNAPPROVED=true` (solo local)
-- `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
-- `XENO_UPDATE_ALLOW_ASAR_ELEVATION=true|false` (default: `true`)
-- `XENO_UPDATE_ENABLE_BINARY_RECOVERY=true|false` (default: `true`)
-- `XENO_UPDATE_BINARY_RECOVERY_ATTEMPTS=<n>` (default: `3`)
-
-### Flujo recomendado de release
-1. Compilar:
+### Que debes subir para un parche pequeno
+1. Genera el asset del app:
 ```bash
-npm install
-npm run build:release:win
+npm run build:asar-asset
 ```
-2. Eso genera en `dist/`:
-- `XenoLauncher-Setup-<version>.exe`
-- `XenoLauncher-Portable-<version>.exe`
-- `XenoLauncher-App-<version>.asar`
-3. Crear release en GitHub y subir assets.
-4. Pruebas privadas:
-- deja la release sin token de aprobacion.
-5. Publicar para todos:
-- agrega `XENO_PUBLIC_UPDATE` en el body/titulo/tag de la release.
+2. Sube a la release de GitHub el archivo:
+- `XenoLauncher-App-1.0.0.asar`
+
+Con eso, la app instalada puede actualizarse sin cambiar version.
+
+### Binarios (setup/portable)
+- `XenoLauncher-Setup-1.0.0.exe` y `XenoLauncher-Portable-1.0.0.exe` son para reinstalacion/manual.
+- No son necesarios para un parche pequeno de codigo si ya publicaste el `.asar`.
+
+### Modo alterno (requiere cambiar version)
+- Solo si lo activas manualmente:
+- `XENO_UPDATE_ENGINE=electron`
+- Ese modo usa `electron-updater` y si requiere version nueva (`1.0.1`, etc).
 
 ---
 
 ## EN (English)
 
-### Goal
-- Users update directly from splash, without manually re-downloading setup/portable.
-- **No global rollout happens without your permission.**
+### Official flow (no version bump)
+- The launcher now defaults to `legacy + asar`.
+- This allows small patches without bumping from `1.0.0` to `1.0.1`.
+- Splash detects build changes from release asset marker/hash and applies the patch.
 
-### Current behavior
-On startup (if `XENO_UPDATE_MODE=auto`), launcher checks updates in this order:
+### Current defaults
+- `XENO_UPDATE_ENGINE=legacy` (default)
+- `XENO_UPDATE_STRATEGY=asar` (default)
+- `XENO_UPDATE_MODE=auto` (default)
 
-0. Update source priority:
-   - `XENO_UPDATE_MANIFEST_URL`
-   - `XENO_UPDATE_REPO`
-   - `build.publish` (github provider) in `package.json`
-   - `repository` in `package.json`
-1. **Setup/Portable (preferred by default)**
-   - Default strategy: `XENO_UPDATE_STRATEGY=binary`.
-   - Uses `Setup` for normal installs and `Portable` for portable runtime.
-   - Applies update and restarts launcher automatically.
-2. ASAR patch (optional)
-   - Used as primary only if `XENO_UPDATE_STRATEGY=asar` or `auto`.
-   - In `auto`, launcher can still recover to binary update after repeated ASAR failures.
-
-### Rollout lock (manual permission)
-By default, app **does not apply** new release for users unless it is approved.
-
-Approval token:
-- Default token: `XENO_PUBLIC_UPDATE`
-- Release is approved when token exists in:
-  - release title, or
-  - tag, or
-  - release body.
-
-If token is missing:
-- Users are not updated.
-- Log records update blocked by approval.
-
-Owner-only local testing override:
-```powershell
-$env:XENO_UPDATE_ALLOW_UNAPPROVED="true"
-npm start
-```
-
-### Useful env vars
-- `XENO_UPDATE_MODE=auto|manual`
-- `XENO_UPDATE_STRATEGY=binary|asar|auto` (default: `binary`)
-- `XENO_UPDATE_REQUIRE_APPROVAL=true|false` (default: `true`)
-- `XENO_UPDATE_APPROVAL_TOKEN=...` (default: `XENO_PUBLIC_UPDATE`)
-- `XENO_UPDATE_ALLOW_UNAPPROVED=true` (local only)
-- `XENO_UPDATE_ALLOW_BINARY_FALLBACK=true` (default: `false`)
-- `XENO_UPDATE_ALLOW_ASAR_ELEVATION=true|false` (default: `true`)
-- `XENO_UPDATE_ENABLE_BINARY_RECOVERY=true|false` (default: `true`)
-- `XENO_UPDATE_BINARY_RECOVERY_ATTEMPTS=<n>` (default: `3`)
-
-### Recommended release flow
-1. Build:
+### What to upload for a small patch
+1. Build the app asset:
 ```bash
-npm install
-npm run build:release:win
+npm run build:asar-asset
 ```
-2. This produces in `dist/`:
-- `XenoLauncher-Setup-<version>.exe`
-- `XenoLauncher-Portable-<version>.exe`
-- `XenoLauncher-App-<version>.asar`
-3. Create GitHub release and upload assets.
-4. Private testing:
-- keep release without approval token.
-5. Public rollout:
-- add `XENO_PUBLIC_UPDATE` to release body/title/tag.
+2. Upload this file to the GitHub release:
+- `XenoLauncher-App-1.0.0.asar`
+
+Installed apps can update without changing version.
+
+### Binary artifacts (setup/portable)
+- `XenoLauncher-Setup-1.0.0.exe` and `XenoLauncher-Portable-1.0.0.exe` are for reinstall/manual usage.
+- They are not required for a small code patch when `.asar` patching is used.
+
+### Alternate mode (requires version bump)
+- Only if manually enabled:
+- `XENO_UPDATE_ENGINE=electron`
+- This uses `electron-updater` and needs a higher app version (`1.0.1`, etc).
