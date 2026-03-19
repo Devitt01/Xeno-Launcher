@@ -587,16 +587,6 @@
                     </div>
                     <button class="action-btn btn-secondary" style="margin-top: 8px;" onclick="saveJavaPath()">Guardar ruta de Java</button>
                     <p class="settings-note">Si esta vacio, Xeno detecta Java automaticamente.</p>
-                    <div class="input-group" style="margin-top: 20px;">
-                        <label>Servicio de skins compartidas (URL)</label>
-                        <input type="text" id="skin-service-url" class="custom-input" placeholder="Vacio = modo local (sin servidor)">
-                    </div>
-                    <div class="input-group">
-                        <label>Token de escritura (opcional)</label>
-                        <input type="password" id="skin-service-token" class="custom-input" placeholder="Opcional">
-                    </div>
-                    <button class="action-btn" style="margin-top: 8px;" onclick="saveSkinServiceSettings()">Guardar servicio de skins</button>
-                    <p class="settings-note">Dejalo vacio para modo local. Solo completalo si quieres usar un servidor de skins compartidas.</p>
                     <p style="font-size: 12px; color: var(--text-dim); margin-top: 10px;">Otras opciones estar&aacute;n disponibles en futuras versiones.</p>
                 </section>
                 <section id="view-skins" class="view-section">
@@ -809,8 +799,6 @@
         let installingInstanceId = null;
         let pendingCreateData = null;
         let javaPathSetting = '';
-        let skinServiceUrl = '';
-        let skinServiceToken = '';
 
         let skinCanvas = null;
         let skinCtx = null;
@@ -824,8 +812,6 @@
         let currentSkinLegacy = false;
         let skinModelMode = 'auto';
         let skinFaceTextureCache = new Map();
-        let usernameCheckSeq = 0;
-        const pendingUsernameChecks = new Map();
         let elyLoginSeq = 0;
         const pendingElyLogins = new Map();
         let loginBusy = false;
@@ -1701,7 +1687,6 @@
             if (!data) return;
             if (data.ram !== undefined && data.ram !== null) setRamUI(data.ram);
             setJavaPathUI(data.javaPath || '');
-            setSkinServiceUI(data.skinServiceUrl, data.skinServiceToken);
         });
 
         api && api.on && api.on('java-path-result', (event, data) => {
@@ -1720,13 +1705,6 @@
             setWindowMaximizedState(!!(data && data.maximized));
         });
 
-        api && api.on && api.on('username-conflict-result', (event, data) => {
-            const requestId = data && data.requestId ? String(data.requestId) : null;
-            if (!requestId || !pendingUsernameChecks.has(requestId)) return;
-            const done = pendingUsernameChecks.get(requestId);
-            pendingUsernameChecks.delete(requestId);
-            done(data || { checked: false, exists: false, serviceUrl: null });
-        });
 
         api && api.on && api.on('ely-login-result', (event, data) => {
             const requestId = data && data.requestId ? String(data.requestId) : null;
@@ -1916,15 +1894,6 @@
                     const value = usernameInput.value.trim();
                     if (!value) { showToast("Ingresa nombre", "error"); return; }
 
-                    const conflict = await checkUsernameConflict(value);
-                    if (skinServiceUrl && (!conflict || !conflict.checked)) {
-                        showToast("No se pudo verificar el usuario en el servicio de skins. Intenta de nuevo.", "error");
-                        return;
-                    }
-                    if (conflict && conflict.checked && conflict.exists) {
-                        showToast(`Ese usuario ya esta registrado en skins compartidas. Usa otro nombre.`, "error");
-                        return;
-                    }
                     currentUser = value;
                     currentAuthType = 'offline';
                 } else if (type === 'ely') {
@@ -2030,20 +1999,6 @@
                 newName = String(currentUser || '').trim();
             }
             if(newName) {
-                if (currentAuthType !== 'ely') {
-                    const oldName = String(currentUser || '').trim();
-                    if (!oldName || oldName.toLowerCase() !== newName.toLowerCase()) {
-                        const conflict = await checkUsernameConflict(newName);
-                        if (skinServiceUrl && (!conflict || !conflict.checked)) {
-                            showToast("No se pudo verificar el usuario en el servicio de skins.", "error");
-                            return;
-                        }
-                        if (conflict && conflict.checked && conflict.exists) {
-                            showToast("Ese usuario ya esta registrado en skins compartidas.", "error");
-                            return;
-                        }
-                    }
-                }
                 currentUser = newName;
                 document.getElementById('display-username').innerText = newName;
                 document.getElementById('offline-username').value = newName;
@@ -2089,28 +2044,6 @@
             });
         }
 
-        function checkUsernameConflict(username) {
-            return new Promise((resolve) => {
-                if (!api || !api.send) {
-                    resolve({ checked: false, exists: false, serviceUrl: null });
-                    return;
-                }
-                const requestId = `user_check_${Date.now()}_${++usernameCheckSeq}`;
-                pendingUsernameChecks.set(requestId, resolve);
-                api.send('check-username-conflict', {
-                    requestId,
-                    username: String(username || '').trim()
-                });
-                setTimeout(() => {
-                    if (pendingUsernameChecks.has(requestId)) {
-                        const done = pendingUsernameChecks.get(requestId);
-                        pendingUsernameChecks.delete(requestId);
-                        done({ checked: false, exists: false, timeout: true, serviceUrl: null });
-                    }
-                }, 2200);
-            });
-        }
-
         function setJavaPathUI(value) {
             javaPathSetting = typeof value === 'string' ? value : '';
             const input = document.getElementById('java-path-input');
@@ -2123,51 +2056,6 @@
             javaPathSetting = javaPath;
             if (api && api.send) {
                 api.send('set-java-path', { javaPath });
-            }
-        }
-
-        function setSkinServiceUI(url, token) {
-            skinServiceUrl = typeof url === 'string' ? url : '';
-            skinServiceToken = typeof token === 'string' ? token : '';
-            const urlInput = document.getElementById('skin-service-url');
-            const tokenInput = document.getElementById('skin-service-token');
-            if (urlInput) urlInput.value = skinServiceUrl;
-            if (tokenInput) tokenInput.value = skinServiceToken;
-        }
-
-        function saveSkinServiceSettings() {
-            const urlInput = document.getElementById('skin-service-url');
-            const tokenInput = document.getElementById('skin-service-token');
-            const rawUrl = urlInput ? urlInput.value.trim() : '';
-            const rawToken = tokenInput ? tokenInput.value.trim() : '';
-
-            if (rawUrl) {
-                try {
-                    const parsed = new URL(rawUrl);
-                    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-                        showToast('La URL debe usar http o https.', 'error');
-                        return;
-                    }
-                } catch {
-                    showToast('URL de servicio invalida.', 'error');
-                    return;
-                }
-            }
-
-            skinServiceUrl = rawUrl;
-            skinServiceToken = rawToken;
-
-            if (api && api.send) {
-                api.send('set-skin-service-settings', {
-                    url: skinServiceUrl,
-                    token: skinServiceToken
-                });
-            }
-
-            if (!skinServiceUrl) {
-                showToast('Modo local activado (sin servidor compartido).', 'success');
-            } else {
-                showToast('Servicio de skins guardado.', 'success');
             }
         }
 

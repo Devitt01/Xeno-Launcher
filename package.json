@@ -5,13 +5,13 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "skin-hub": "node skin-hub-server.js",
     "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "build:asar-asset": "node scripts/export-update-asar.js",
     "build:win": "electron-builder --win nsis --publish never",
     "build:win:clean": "npm run clean:dist && electron-builder --win nsis --publish never",
     "build:portable": "npm run clean:dist && electron-builder --win portable --publish never --config.win.artifactName=XenoLauncher-Portable-${version}.exe",
-    "build:release:win": "set \"XENO_BUILD_OUTPUT_DIR=dist-release\" && electron-builder --win nsis --publish never --config.directories.output=dist-release && npm run build:asar-asset && electron-builder --win portable --publish never --config.directories.output=dist-release --config.win.artifactName=XenoLauncher-Portable-${version}.exe"
+    "build:release:win": "set \"XENO_BUILD_OUTPUT_DIR=dist-release\" && electron-builder --win nsis --publish never --config.directories.output=dist-release && npm run build:asar-asset && electron-builder --win portable --publish never --config.directories.output=dist-release --config.win.artifactName=XenoLauncher-Portable-${version}.exe",
+    "build:patch:asar": "set \"XENO_BUILD_OUTPUT_DIR=dist-release\" && electron-builder --win --dir --publish never --config.directories.output=dist-release && npm run build:asar-asset"
   },
   "author": "Devitt",
   "license": "ISC",
@@ -20,6 +20,7 @@
     "url": "https://github.com/Devitt01/Xeno-Launcher.git"
   },
   "dependencies": {
+    "electron-updater": "^6.3.0",
     "minecraft-launcher-core": "^3.14.0",
     "electron-store": "^8.1.0"
   },
@@ -38,7 +39,6 @@
       "**/*",
       "!dist/**",
       "!node_modules/.cache/**",
-      "!skin-hub-data/**",
       "!cloudflared.exe",
       "!*.log"
     ],

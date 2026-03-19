@@ -3,7 +3,6 @@ dist/
 dist-release/
 dist2/
 dist-test/
-skin-hub-data/
 *.log
 cloudflared.exe
 build/icon-256.png

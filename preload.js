@@ -20,8 +20,6 @@ const sendChannels = new Set([
   'open-external',
   'get-settings',
   'set-java-path',
-  'set-skin-service-settings',
-  'check-username-conflict',
   'ely-login',
   'window-minimize',
   'window-toggle-maximize',
@@ -53,7 +51,6 @@ const onChannels = new Set([
   'java-guide',
   'settings-data',
   'java-path-result',
-  'username-conflict-result',
   'ely-login-result',
   'window-state'
 ]);

@@ -11,7 +11,6 @@ Minecraft launcher (non-premium) built with Electron.
 - Gestion de instancias: Vanilla, Forge, NeoForge, Fabric y Snapshots.
 - Sistema de skins local.
 - Login con Ely.by (cuenta no-premium con skin global).
-- Soporte opcional de skins compartidas con `skin-hub-server.js`.
 - Splash de inicio.
 - Base de actualizacion del launcher por releases.
 
@@ -26,7 +25,6 @@ npm start
 ```
 
 ### Documentacion relacionada
-- Skins compartidas: `SKIN-HUB-DEPLOY.md`
 - Actualizaciones del launcher: `LAUNCHER-UPDATES.md`
 
 ## EN
@@ -38,7 +36,6 @@ npm start
 - Instance management: Vanilla, Forge, NeoForge, Fabric, and Snapshots.
 - Local skin system.
 - Ely.by login (non-premium account with global skin).
-- Optional shared skins via `skin-hub-server.js`.
 - Startup splash.
 - Launcher update foundation based on releases.
 
@@ -53,5 +50,4 @@ npm start
 ```
 
 ### Related docs
-- Shared skins: `SKIN-HUB-DEPLOY.md`
 - Launcher updates: `LAUNCHER-UPDATES.md`

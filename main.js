@@ -14,6 +14,12 @@ const http = require('http');
 const { execFile, execSync, spawn } = require('child_process');
 const Store = require('electron-store');
 const { Client } = require('minecraft-launcher-core');
+let autoUpdater = null;
+try {
+  ({ autoUpdater } = require('electron-updater'));
+} catch {
+  autoUpdater = null;
+}
 let MCLCHandler = null;
 try {
   MCLCHandler = require('minecraft-launcher-core/components/handler');
@@ -91,9 +97,7 @@ const store = new Store({
     forgeMcVersions: [],
     neoforgeMcVersions: [],
     fabricMcVersions: [],
-    snapshotMcVersions: [],
-    skinServiceUrl: '',
-    skinServiceToken: ''
+    snapshotMcVersions: []
   }
 });
 
@@ -143,7 +147,6 @@ const AUTHLIB_INJECTOR_FILE = 'authlib-injector.jar';
 const ELY_AUTH_SERVER_URL = 'https://authserver.ely.by';
 const ELY_AUTHLIB_INJECTOR_TARGET = 'ely.by';
 const MCLC_ASSET_CONCURRENCY = 12;
-const DEFAULT_SHARED_SKIN_SERVICE_URL = process.env.XENO_DEFAULT_SKIN_SERVICE_URL || '';
 const STARTUP_MIN_SPLASH_MS = 3000;
 const STARTUP_MAX_WAIT_MS = 45000;
 const UPDATE_CHECK_TIMEOUT_MS = 12000;
@@ -151,8 +154,9 @@ const UPDATE_DOWNLOAD_TIMEOUT_MS = 180000;
 const UPDATE_MANIFEST_URL = String(process.env.XENO_UPDATE_MANIFEST_URL || '').trim();
 const UPDATE_REPO_OVERRIDE = String(process.env.XENO_UPDATE_REPO || '').trim();
 const UPDATE_MODE = String(process.env.XENO_UPDATE_MODE || 'auto').trim().toLowerCase();
-const UPDATE_STRATEGY_RAW = String(process.env.XENO_UPDATE_STRATEGY || 'binary').trim().toLowerCase();
-const UPDATE_STRATEGY = ['auto', 'asar', 'binary'].includes(UPDATE_STRATEGY_RAW) ? UPDATE_STRATEGY_RAW : 'binary';
+const UPDATE_ENGINE = String(process.env.XENO_UPDATE_ENGINE || 'legacy').trim().toLowerCase();
+const UPDATE_STRATEGY_RAW = String(process.env.XENO_UPDATE_STRATEGY || 'asar').trim().toLowerCase();
+const UPDATE_STRATEGY = ['auto', 'asar', 'binary'].includes(UPDATE_STRATEGY_RAW) ? UPDATE_STRATEGY_RAW : 'asar';
 const UPDATE_INCLUDE_PRERELEASE = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_INCLUDE_PRERELEASE || '').trim());
 const UPDATE_REQUIRE_APPROVAL = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_REQUIRE_APPROVAL || 'true').trim());
 const UPDATE_ALLOW_UNAPPROVED = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_UNAPPROVED || '').trim());
@@ -175,11 +179,6 @@ const addonCache = {
   sodium: new Map()
 };
 
-const sharedSkinServiceHealthCache = {
-  url: '',
-  ok: false,
-  checkedAt: 0
-};
 
 async function runWithConcurrency(items, limit, worker) {
   if (!Array.isArray(items) || items.length === 0) return;
@@ -561,15 +560,14 @@ function buildPreferredUpdateMarkerFromAssets(assets, options = {}) {
   const normalized = normalizeReleaseAssets(assets);
   if (normalized.length === 0) return 'no-assets';
 
+  const asarPreferred = selectAsarUpdateAsset(normalized);
+  if (asarPreferred) {
+    return `asar:${buildReleaseAssetsMarker([asarPreferred])}`;
+  }
+
   const strategyRaw = String(options.strategy || UPDATE_STRATEGY || 'binary').trim().toLowerCase();
   const strategy = ['auto', 'asar', 'binary'].includes(strategyRaw) ? strategyRaw : 'binary';
   const preferAsar = strategy !== 'binary';
-  if (preferAsar) {
-    const asar = selectAsarUpdateAsset(normalized);
-    if (asar) {
-      return `asar:${buildReleaseAssetsMarker([asar])}`;
-    }
-  }
 
   if (process.platform === 'win32') {
     const windowsMode = String(options.windowsMode || getWindowsUpdateMode() || '').trim().toLowerCase();
@@ -585,13 +583,6 @@ function buildPreferredUpdateMarkerFromAssets(assets, options = {}) {
     }
   }
 
-  if (!preferAsar) {
-    const asarFallback = selectAsarUpdateAsset(normalized);
-    if (asarFallback) {
-      return `asar:${buildReleaseAssetsMarker([asarFallback])}`;
-    }
-  }
-
   return `all:${buildReleaseAssetsMarker(normalized)}`;
 }
 
@@ -604,6 +595,24 @@ function sha1File(filePath) {
   } catch {
     return '';
   }
+}
+
+function waitMs(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, Math.max(0, Number(ms) || 0));
+  });
+}
+
+async function readCurrentAsarSha1WithRetry(maxAttempts = 24, delayMs = 250) {
+  const attempts = Math.max(1, Number(maxAttempts) || 1);
+  for (let i = 0; i < attempts; i += 1) {
+    const hash = sha1File(getCurrentAppAsarPath()).toLowerCase();
+    if (hash) return hash;
+    if (i < attempts - 1) {
+      await waitMs(delayMs);
+    }
+  }
+  return '';
 }
 
 function getFileFingerprint(filePath) {
@@ -1414,7 +1423,158 @@ async function fetchLatestReleaseInfo() {
   };
 }
 
+async function checkAndInstallLauncherUpdateElectron(reportStatus) {
+  const send = typeof reportStatus === 'function' ? reportStatus : () => {};
+  send({
+    text: 'Buscando actualizaciones del launcher...',
+    phase: 'checking',
+    progress: null,
+    indeterminate: true,
+    showProgress: true
+  });
+
+  if (!autoUpdater) {
+    appendFocusLog('UPDATE (electron) electron-updater no disponible');
+    send({
+      text: 'No se pudo verificar actualizaciones del launcher. Continuando...',
+      phase: 'error',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { skipped: true, error: 'electron-updater no disponible' };
+  }
+
+  if (!app.isPackaged) {
+    appendFocusLog('UPDATE (electron) skipped (dev mode)');
+    send({
+      text: 'Modo desarrollo detectado. Continuando...',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { skipped: true };
+  }
+
+  if (process.platform !== 'win32') {
+    send({
+      text: 'Actualizacion del launcher disponible. Instala manualmente.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { updateAvailable: true, manual: true };
+  }
+
+  if (isPortableRuntime()) {
+    send({
+      text: 'Modo portable detectado. Actualiza manualmente.',
+      phase: 'manual',
+      showProgress: false,
+      progress: null,
+      indeterminate: false
+    });
+    return { updateAvailable: true, manual: true, reason: 'portable' };
+  }
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.allowPrerelease = UPDATE_INCLUDE_PRERELEASE;
+  autoUpdater.autoRunAppAfterInstall = true;
+
+  autoUpdater.removeAllListeners();
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      resolve(payload || {});
+    };
+
+    autoUpdater.on('checking-for-update', () => {
+      appendFocusLog('UPDATE (electron) checking');
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      const version = info && info.version ? String(info.version) : '';
+      appendFocusLog(`UPDATE (electron) available ${version}`);
+      send({
+        text: version ? `Nueva version del launcher ${version} encontrada...` : 'Nueva version del launcher encontrada...',
+        phase: 'downloading',
+        progress: 0,
+        indeterminate: false,
+        showProgress: true
+      });
+    });
+
+    autoUpdater.on('update-not-available', () => {
+      appendFocusLog('UPDATE (electron) no updates');
+      send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
+      finish({ upToDate: true });
+    });
+
+    autoUpdater.on('download-progress', (progress) => {
+      const pct = Math.max(0, Math.min(100, Math.round(progress && progress.percent ? progress.percent : 0)));
+      send({
+        text: `Descargando actualizacion del launcher... ${pct}%`,
+        phase: 'downloading',
+        progress: pct,
+        indeterminate: false,
+        showProgress: true
+      });
+    });
+
+    autoUpdater.on('update-downloaded', (info) => {
+      const version = info && info.version ? String(info.version) : '';
+      appendFocusLog(`UPDATE (electron) downloaded ${version}`);
+      send({
+        text: 'Actualizacion del launcher lista. Reiniciando...',
+        phase: 'installing',
+        progress: 100,
+        indeterminate: true,
+        showProgress: true
+      });
+      setTimeout(() => {
+        try {
+          autoUpdater.quitAndInstall(false, true);
+        } catch (err) {
+          appendFocusLog(`UPDATE (electron) quitAndInstall failed: ${String(err)}`);
+        }
+      }, 500);
+      finish({ installing: true, engine: 'electron', version });
+    });
+
+    autoUpdater.on('error', (err) => {
+      appendFocusLog(`UPDATE (electron) error: ${String(err)}`);
+      send({
+        text: 'No se pudo verificar actualizaciones del launcher. Continuando...',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      finish({ skipped: true, error: String(err) });
+    });
+
+    autoUpdater.checkForUpdates().catch((err) => {
+      appendFocusLog(`UPDATE (electron) check failed: ${String(err)}`);
+      send({
+        text: 'No se pudo verificar actualizaciones del launcher. Continuando...',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      finish({ skipped: true, error: String(err) });
+    });
+  });
+}
+
 async function checkAndInstallLauncherUpdate(reportStatus) {
+  if (UPDATE_ENGINE === 'electron') {
+    return await checkAndInstallLauncherUpdateElectron(reportStatus);
+  }
   const send = typeof reportStatus === 'function' ? reportStatus : () => {};
   send({
     text: 'Buscando actualizaciones del launcher...',
@@ -1468,18 +1628,34 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const lastAttemptCount = Number(store.get('lastUpdateAttemptCount', 0)) || 0;
   const lastAttemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
   const lastAttemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
-  const currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
+  let currentAsarSha1 = sha1File(getCurrentAppAsarPath()).toLowerCase();
   const attemptPatchReferenceSha1 = (lastAttemptPatchSha1 || sha1File(lastAttemptPatchPath)).toLowerCase();
   const hasMarkerUpdate = !!latestMarker && latestMarker !== appliedMarker;
-  const hasUnknownAttemptHash = !!(
-    attemptPatchReferenceSha1 &&
-    !currentAsarSha1
-  );
   const hasPendingAsarAttempt = !!(
     hasMarkerUpdate &&
     latestMarker &&
     lastAttemptMarker === latestMarker &&
     (lastAttemptPatchPath || attemptPatchReferenceSha1)
+  );
+  if (!currentAsarSha1 && hasPendingAsarAttempt && attemptPatchReferenceSha1) {
+    appendFocusLog(`UPDATE Current ASAR hash unavailable; waiting for stabilization (${latestMarker})`);
+    currentAsarSha1 = await readCurrentAsarSha1WithRetry(24, 250);
+  }
+  if (
+    hasPendingAsarAttempt &&
+    attemptPatchReferenceSha1 &&
+    currentAsarSha1 &&
+    attemptPatchReferenceSha1 === currentAsarSha1
+  ) {
+    store.set('lastAppliedUpdateMarker', latestMarker);
+    clearPendingUpdateAttempt();
+    appendFocusLog(`UPDATE ASAR startup hash confirmed marker: ${latestMarker}`);
+    send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
+    return { upToDate: true };
+  }
+  const hasUnknownAttemptHash = !!(
+    attemptPatchReferenceSha1 &&
+    !currentAsarSha1
   );
   const hasAttemptHashMismatch = !!(
     attemptPatchReferenceSha1 &&
@@ -2838,17 +3014,6 @@ function normalizeHttpOrHttpsUrl(value) {
   }
 }
 
-function getSkinServiceConfig() {
-  const storedUrl = normalizeHttpOrHttpsUrl(store.get('skinServiceUrl', ''));
-  const envUrl = normalizeHttpOrHttpsUrl(process.env.XENO_SKIN_SERVICE_URL || '');
-  const defaultUrl = normalizeHttpOrHttpsUrl(DEFAULT_SHARED_SKIN_SERVICE_URL || '');
-  const url = storedUrl || envUrl || defaultUrl;
-  if (!url) return null;
-  const storedToken = String(store.get('skinServiceToken', '') || '').trim();
-  const envToken = String(process.env.XENO_SKIN_SERVICE_TOKEN || '').trim();
-  const token = storedToken || envToken || '';
-  return { url, token };
-}
 
 function requestJsonWithMethod(method, targetUrl, body = null, extraHeaders = {}, redirects = 3, timeoutMs = 10000) {
   return new Promise((resolve, reject) => {
@@ -3111,35 +3276,6 @@ async function ensureLaunchProfileAuth(profile, fallbackName = 'Offline') {
   }
 }
 
-async function isSharedSkinServiceReachable(config) {
-  if (!config || !config.url) return false;
-  const now = Date.now();
-  if (
-    sharedSkinServiceHealthCache.url === config.url &&
-    now - sharedSkinServiceHealthCache.checkedAt < 30000
-  ) {
-    return sharedSkinServiceHealthCache.ok;
-  }
-
-  let ok = false;
-  try {
-    await requestJsonWithMethod('GET', `${config.url}/status`, null, {}, 1, 900);
-    ok = true;
-  } catch {
-    try {
-      await requestJsonWithMethod('GET', config.url, null, {}, 1, 900);
-      ok = true;
-    } catch {
-      ok = false;
-    }
-  }
-
-  sharedSkinServiceHealthCache.url = config.url;
-  sharedSkinServiceHealthCache.ok = ok;
-  sharedSkinServiceHealthCache.checkedAt = now;
-  return ok;
-}
-
 function readSkinDataUrlFromDisk(username) {
   const filePath = skinFilePath(username);
   if (!filePath || !fs.existsSync(filePath)) return null;
@@ -3152,69 +3288,6 @@ function readSkinDataUrlFromDisk(username) {
   }
 }
 
-async function syncSkinToSharedService(username, skinData, model = 'classic') {
-  const config = getSkinServiceConfig();
-  if (!config || !config.url) return false;
-  const targetUser = String(username || '').trim();
-  if (!targetUser) return false;
-  const buffer = decodeSkinDataUrl(skinData);
-  if (!buffer || !isValidSkinPng(buffer)) return false;
-
-  const headers = {};
-  if (config.token) headers['X-Xeno-Token'] = config.token;
-  await requestJsonWithMethod('PUT', `${config.url}/xeno/skins/${encodeURIComponent(targetUser)}`, {
-    skinData: `data:image/png;base64,${buffer.toString('base64')}`,
-    model: model === 'slim' ? 'slim' : 'classic'
-  }, headers, 1, 3000);
-  return true;
-}
-
-async function deleteSkinFromSharedService(username) {
-  const config = getSkinServiceConfig();
-  if (!config || !config.url) return false;
-  const targetUser = String(username || '').trim();
-  if (!targetUser) return false;
-
-  const headers = {};
-  if (config.token) headers['X-Xeno-Token'] = config.token;
-  await requestJsonWithMethod('DELETE', `${config.url}/xeno/skins/${encodeURIComponent(targetUser)}`, null, headers, 1, 3000);
-  return true;
-}
-
-async function checkSharedUsernameConflict(username) {
-  const config = getSkinServiceConfig();
-  if (!config || !config.url) {
-    return { checked: false, exists: false, serviceUrl: null };
-  }
-
-  const targetUser = String(username || '').trim();
-  if (!targetUser) {
-    return { checked: false, exists: false, serviceUrl: config.url };
-  }
-
-  const reachable = await isSharedSkinServiceReachable(config);
-  if (!reachable) {
-    return { checked: false, exists: false, serviceUrl: config.url, reachable: false };
-  }
-
-  try {
-    await requestJsonWithMethod(
-      'GET',
-      `${config.url}/xeno/skins/${encodeURIComponent(targetUser)}`,
-      null,
-      {},
-      1,
-      1200
-    );
-    return { checked: true, exists: true, serviceUrl: config.url, reachable: true };
-  } catch (err) {
-    const msg = err ? String(err) : '';
-    if (msg.includes('HTTP 404')) {
-      return { checked: true, exists: false, serviceUrl: config.url, reachable: true };
-    }
-    return { checked: false, exists: false, serviceUrl: config.url, reachable: true, error: msg };
-  }
-}
 
 function parseAuthlibVersionFromMetadata(xmlText) {
   if (!xmlText || typeof xmlText !== 'string') return null;
@@ -3334,56 +3407,31 @@ async function attachSkinLaunchArgs(opts, username, authType = 'offline') {
   const profileSkin = profile && profile.skinData ? String(profile.skinData) : null;
   const profileModel = profile && profile.skinModel === 'slim' ? 'slim' : 'classic';
   const localSkin = profileSkin || readSkinDataUrlFromDisk(targetUser);
-  const sharedConfig = getSkinServiceConfig();
 
-  let authServerUrl = null;
-  let skinMode = 'local';
-
-  if (sharedConfig && sharedConfig.url) {
-    const sharedReachable = await isSharedSkinServiceReachable(sharedConfig);
-    if (sharedReachable) {
-      authServerUrl = sharedConfig.url;
-      skinMode = 'shared';
-    } else {
-      appendFocusLog(`SKIN Shared service unavailable: ${sharedConfig.url}`);
-    }
-
-    if (localSkin && sharedReachable) {
+  if (localSkin) {
+    applySkinForUser(targetUser, localSkin, profileModel);
+  } else {
+    const filePath = skinFilePath(targetUser);
+    if (filePath && fs.existsSync(filePath)) {
       try {
-        await syncSkinToSharedService(targetUser, localSkin, profileModel);
-        appendFocusLog(`SKIN Shared upload ok: ${targetUser}`);
-      } catch (err) {
-        appendFocusLog(`SKIN Shared upload failed (${targetUser}): ${String(err)}`);
-      }
-    }
-  }
-
-  if (!authServerUrl) {
-    if (localSkin) {
-      applySkinForUser(targetUser, localSkin, profileModel);
-    } else {
-      const filePath = skinFilePath(targetUser);
-      if (filePath && fs.existsSync(filePath)) {
-        try {
-          const data = fs.readFileSync(filePath);
-          if (isValidSkinPng(data)) {
-            skinServer.setSkin(targetUser, `data:image/png;base64,${data.toString('base64')}`);
-          }
-        } catch {
-          // ignore
+        const data = fs.readFileSync(filePath);
+        if (isValidSkinPng(data)) {
+          skinServer.setSkin(targetUser, `data:image/png;base64,${data.toString('base64')}`);
         }
+      } catch {
+        // ignore
       }
     }
-    authServerUrl = await ensureSkinServerUrl();
   }
 
+  const authServerUrl = await ensureSkinServerUrl();
   const authlibJar = await ensureAuthlibInjectorJar();
   const arg = `-javaagent:${authlibJar}=${authServerUrl}`;
 
   if (!Array.isArray(opts.customArgs)) opts.customArgs = [];
   if (!opts.customArgs.includes(arg)) opts.customArgs.push(arg);
-  appendFocusLog(`SKIN Auth mode=${skinMode} url=${authServerUrl}`);
-  return skinMode;
+  appendFocusLog(`SKIN Auth mode=local url=${authServerUrl}`);
+  return 'local';
 }
 
 function buildOfflineAuth(username) {
@@ -3734,11 +3782,6 @@ async function initializeLauncherRuntime() {
   if (storedProfile && storedProfile.authType !== 'ely' && storedProfile.skinData) {
     const storedModel = storedProfile.skinModel === 'slim' ? 'slim' : 'classic';
     applySkinForUser(storedProfile.name, storedProfile.skinData, storedModel);
-    syncSkinToSharedService(storedProfile.name, storedProfile.skinData, storedModel)
-      .then((ok) => {
-        if (ok) appendFocusLog(`SKIN Shared startup sync ok: ${storedProfile.name}`);
-      })
-      .catch((err) => appendFocusLog(`SKIN Shared startup sync failed: ${String(err)}`));
   }
 }
 
@@ -3818,8 +3861,10 @@ app.whenReady().then(() => {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null);
   }
-  consumeAsarUpdateStatus();
-  consumeBinaryUpdateStatus();
+  if (UPDATE_ENGINE !== 'electron') {
+    consumeAsarUpdateStatus();
+    consumeBinaryUpdateStatus();
+  }
   splashWindow = createSplashWindow();
   const splashStart = Date.now();
   let splashDone = false;
@@ -3868,13 +3913,17 @@ app.whenReady().then(() => {
         const update = await checkAndInstallLauncherUpdate(sendSplashStatus);
         if (update && update.installing) {
           quittingForUpdate = true;
-          setTimeout(() => {
-            try {
-              app.exit(0);
-            } catch {
-              app.quit();
-            }
-          }, 300);
+          if (!update.engine || update.engine !== 'electron') {
+            setTimeout(() => {
+              try {
+                app.exit(0);
+              } catch {
+                app.quit();
+              }
+            }, 300);
+          } else {
+            appendFocusLog('UPDATE (electron) quitAndInstall requested');
+          }
           return;
         }
       } catch (err) {
@@ -4198,37 +4247,12 @@ ipcMain.on('save-profile', (event, data) => {
   store.set('profile', profile);
   event.reply('profile-data', profile);
 
-  if (profile.authType !== 'ely') {
-    if (profile.skinData) {
-      syncSkinToSharedService(profile.name, profile.skinData, profile.skinModel)
-        .then((ok) => {
-          if (ok) appendFocusLog(`SKIN Shared profile sync ok: ${profile.name}`);
-        })
-        .catch((err) => appendFocusLog(`SKIN Shared profile sync failed: ${String(err)}`));
-    } else {
-      deleteSkinFromSharedService(profile.name)
-        .catch((err) => appendFocusLog(`SKIN Shared delete failed (${profile.name}): ${String(err)}`));
-    }
-  }
-
-  if (
-    previous &&
-    previous.name &&
-    String(previous.name).trim().toLowerCase() !== profile.name.toLowerCase()
-  ) {
-    deleteSkinFromSharedService(previous.name)
-      .catch((err) => appendFocusLog(`SKIN Shared delete failed (${previous.name}): ${String(err)}`));
-  }
 });
 
 ipcMain.on('clear-profile', () => {
   const previous = getStoredProfile();
   if (previous && previous.name) removeSkinForUser(previous.name);
   store.set('profile', null);
-  if (previous && previous.name) {
-    deleteSkinFromSharedService(previous.name)
-      .catch((err) => appendFocusLog(`SKIN Shared delete failed (${previous.name}): ${String(err)}`));
-  }
 });
 
 ipcMain.on('set-ram', (event, val) => {
@@ -4243,9 +4267,7 @@ function buildSettingsPayload() {
   }
   return {
     ram: safeRam,
-    javaPath: store.get('javaPath', ''),
-    skinServiceUrl: store.get('skinServiceUrl', ''),
-    skinServiceToken: store.get('skinServiceToken', '')
+    javaPath: store.get('javaPath', '')
   };
 }
 
@@ -4315,41 +4337,7 @@ ipcMain.on('set-java-path', async (event, data) => {
   });
 });
 
-ipcMain.on('set-skin-service-settings', (event, data) => {
-  if (!data || typeof data !== 'object') return;
 
-  const normalizedUrl = normalizeHttpOrHttpsUrl(data.url || '');
-  const token = String(data.token || '').trim();
-
-  store.set('skinServiceUrl', normalizedUrl || '');
-  store.set('skinServiceToken', token);
-  sharedSkinServiceHealthCache.url = '';
-  sharedSkinServiceHealthCache.ok = false;
-  sharedSkinServiceHealthCache.checkedAt = 0;
-
-  event.reply('settings-data', buildSettingsPayload());
-});
-
-ipcMain.on('check-username-conflict', async (event, data) => {
-  const requestId = data && data.requestId ? String(data.requestId) : null;
-  const username = data && data.username ? String(data.username) : '';
-  let result = { checked: false, exists: false, serviceUrl: null };
-  try {
-    result = await checkSharedUsernameConflict(username);
-  } catch (err) {
-    result = {
-      checked: false,
-      exists: false,
-      serviceUrl: getSkinServiceConfig() ? getSkinServiceConfig().url : null,
-      error: err ? String(err) : 'Unknown error'
-    };
-  }
-  event.sender.send('username-conflict-result', {
-    requestId,
-    username,
-    ...result
-  });
-});
 
 ipcMain.on('install-instance', async (event, data) => {
   if (!data || !data.name || !data.version) {
@@ -4639,8 +4627,6 @@ ipcMain.on('launch-game', async (event, instanceId) => {
     const skinMode = await attachSkinLaunchArgs(opts, launchUsername, authType);
     if (skinMode === 'ely') {
       event.sender.send('game-log', '[Skin] Ely.by activado.');
-    } else if (skinMode === 'shared') {
-      event.sender.send('game-log', '[Skin] Modo compartido activado (usuarios Xeno).');
     } else if (skinMode === 'local') {
       event.sender.send('game-log', '[Skin] Modo local activado.');
     } else {
@@ -4710,3 +4696,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
       event.sender.send('launch-error', err ? `${String(err)}${details}` : `Error al iniciar.${details}`);
     });
 });
+
+
+
+
