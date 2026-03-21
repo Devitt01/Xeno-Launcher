@@ -964,6 +964,22 @@ function spawnDetached(command, args = []) {
   }
 }
 
+function spawnDetachedDetailed(command, args = []) {
+  try {
+    const child = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true
+    });
+    child.unref();
+    return { ok: true, error: '' };
+  } catch (err) {
+    return {
+      ok: false,
+      error: String(err && err.message ? err.message : err || 'spawn failed')
+    };
+  }
+}
 function psQuote(value) {
   return `'${String(value || '').replace(/'/g, "''")}'`;
 }
@@ -1179,7 +1195,41 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '$ok=$false',
     '$errorMessage=""',
     '$appliedSha1=""',
-    'for($i=0;$i -lt 120;$i++){',
+    '$started=$false',
+    '$startError=""',
+    '$statusDir = Split-Path -Parent $status',
+    'function Write-Status([string]$stage){',
+    '  try {',
+    '    $payload = @{',
+    '      stage = $stage',
+    '      ok = $ok',
+    '      marker = $marker',
+    '      elevated = $elevated',
+    '      expectedSha1 = [string]$expectedSha1',
+    '      appliedSha1 = [string]$appliedSha1',
+    '      dst = [string]$dst',
+    '      error = [string]$errorMessage',
+    '      restarted = $started',
+    '      restartError = [string]$startError',
+    '      time = (Get-Date).ToString("o")',
+    '    } | ConvertTo-Json -Compress',
+    '    New-Item -ItemType Directory -Path $statusDir -Force | Out-Null',
+    '    Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
+    '  } catch {}',
+    '}',
+    'Write-Status -stage "started"',
+    'if($launcherPid -gt 0){',
+    '  for($k=0;$k -lt 360;$k++){',
+    '    try {',
+    '      $proc = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue',
+    '    } catch {',
+    '      $proc = $null',
+    '    }',
+    '    if(-not $proc){ break }',
+    '    Start-Sleep -Milliseconds 250',
+    '  }',
+    '}',
+    'for($i=0;$i -lt 180;$i++){',
     '  try {',
     '    if(Test-Path -LiteralPath $bak){ Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue }',
     '    if(Test-Path -LiteralPath $dst){ Move-Item -LiteralPath $dst -Destination $bak -Force }',
@@ -1213,25 +1263,8 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     'if(-not $ok -and (Test-Path -LiteralPath $bak) -and -not (Test-Path -LiteralPath $dst)){',
     '  try { Move-Item -LiteralPath $bak -Destination $dst -Force } catch {}',
     '}',
-    'if($launcherPid -gt 0){',
-    '  for($k=0;$k -lt 240;$k++){',
-    '    try {',
-    '      $proc = Get-Process -Id $launcherPid -ErrorAction SilentlyContinue',
-    '    } catch {',
-    '      $proc = $null',
-    '    }',
-    '    if(-not $proc){ break }',
-    '    Start-Sleep -Milliseconds 250',
-    '  }',
-    '}',
-    'try {',
-    '  $prePayload = @{ ok = $ok; marker = $marker; elevated = $elevated; preStart = $true; expectedSha1 = [string]$expectedSha1; appliedSha1 = [string]$appliedSha1; dst = [string]$dst; error = [string]$errorMessage; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
-    '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
-    '  Set-Content -LiteralPath $status -Value $prePayload -Encoding UTF8 -Force',
-    '} catch {}',
+    'Write-Status -stage "applied"',
     'Start-Sleep -Milliseconds 250',
-    '$started=$false',
-    '$startError=""',
     'for($j=0;$j -lt 40;$j++){',
     '  try {',
     '    $newProc = Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -PassThru -ErrorAction Stop',
@@ -1269,11 +1302,7 @@ function buildAsarApplyScript({ src, dst, backup, exe, statusPath, marker, eleva
     '    if(-not $startError){ $startError = [string]$_.Exception.Message }',
     '  }',
     '}',
-    'try {',
-    '  $payload = @{ ok = $ok; marker = $marker; elevated = $elevated; restarted = $started; expectedSha1 = [string]$expectedSha1; appliedSha1 = [string]$appliedSha1; dst = [string]$dst; error = [string]$errorMessage; restartError = [string]$startError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
-    '  New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
-    '  Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
-    '} catch {}'
+    'Write-Status -stage "final"'
   ].join(';');
 }
 
@@ -1287,6 +1316,7 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
     const expectedSha1 = String(options && options.expectedSha1 ? options.expectedSha1 : '').trim().toLowerCase();
     const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
     if (!src || !dst || !exe || !statusPath || src.toLowerCase() === dst.toLowerCase()) return false;
+
     const backup = `${dst}.bak`;
     const applyScript = buildAsarApplyScript({
       src,
@@ -1300,57 +1330,109 @@ function launchAsarSelfUpdater(downloadedAsarPath, statusFilePath, marker = '', 
       expectedSha1
     });
 
-    const encodedApplyScript = psEncode(applyScript);
+    const applyScriptPath = path.join(path.dirname(statusPath), `xeno-launcher-asar-apply-${Date.now()}-${process.pid}.ps1`);
+    try {
+      fs.writeFileSync(applyScriptPath, applyScript, 'utf8');
+    } catch (err) {
+      appendFocusLog(`UPDATE ASAR updater script write failed: ${String(err)}`);
+      return false;
+    }
+
     if (!elevate) {
-      return spawnDetached('powershell.exe', [
+      const directLaunch = spawnDetachedDetailed('powershell.exe', [
         '-NoProfile',
         '-ExecutionPolicy',
         'Bypass',
         '-WindowStyle',
         'Hidden',
-        '-EncodedCommand',
-        encodedApplyScript
+        '-File',
+        applyScriptPath
       ]);
+      if (!directLaunch.ok) {
+        appendFocusLog(`UPDATE ASAR updater launch failed (non-elevated): ${directLaunch.error || '<unknown>'}`);
+      }
+      return directLaunch.ok;
     }
+
     const bootstrapScript = [
       `$status=${psQuote(statusPath)}`,
       `$marker=${psQuote(String(marker || ''))}`,
-      `$exe=${psQuote(exe)}`,
-      `$encoded=${psQuote(encodedApplyScript)}`,
-      '$launched=$false',
+      `$scriptPath=${psQuote(applyScriptPath)}`,
       '$launchError=""',
       'try {',
-      '  $args = @("-NoProfile","-ExecutionPolicy","Bypass","-EncodedCommand",$encoded)',
-      '  Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs | Out-Null',
-      '  $launched=$true',
+      '  $args = @("-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File",$scriptPath)',
+      '  Start-Process -FilePath "powershell.exe" -ArgumentList $args -Verb RunAs -ErrorAction Stop | Out-Null',
       '} catch {',
       '  $launchError = [string]$_.Exception.Message',
-      '}',
-      'if(-not $launched){',
       '  try {',
-      '    $payload = @{ ok = $false; marker = $marker; elevated = $true; launchFailed = $true; error = [string]$launchError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+      '    $payload = @{ ok = $false; marker = $marker; elevated = $true; launchFailed = $true; stage = "launch_failed"; error = [string]$launchError; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
       '    New-Item -ItemType Directory -Path (Split-Path -Parent $status) -Force | Out-Null',
       '    Set-Content -LiteralPath $status -Value $payload -Encoding UTF8 -Force',
-      '  } catch {}',
-      '  try {',
-      '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) | Out-Null',
       '  } catch {}',
       '}'
     ].join(';');
 
-    const encodedBootstrapScript = psEncode(bootstrapScript);
-    return spawnDetached('powershell.exe', [
+    const launchBootstrap = spawnDetachedDetailed('powershell.exe', [
       '-NoProfile',
       '-ExecutionPolicy',
       'Bypass',
       '-WindowStyle',
       'Hidden',
-      '-EncodedCommand',
-      encodedBootstrapScript
+      '-Command',
+      bootstrapScript
     ]);
+    if (launchBootstrap.ok) return true;
+    appendFocusLog(`UPDATE ASAR bootstrap launch failed (-Command): ${launchBootstrap.error || '<unknown>'}`);
+
+    const launchViaCmd = spawnDetachedDetailed('cmd.exe', [
+      '/c',
+      'start',
+      '',
+      'powershell.exe',
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      bootstrapScript
+    ]);
+    if (launchViaCmd.ok) return true;
+    appendFocusLog(`UPDATE ASAR bootstrap launch failed (cmd start): ${launchViaCmd.error || '<unknown>'}`);
+    return false;
   } catch {
     return false;
   }
+}
+
+async function waitForAsarUpdaterHandshake(statusFilePath, timeoutMs = 3000) {
+  const statusPath = path.resolve(String(statusFilePath || '').trim());
+  if (!statusPath) return { seen: false, payload: null };
+
+  const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 0);
+  while (Date.now() <= deadline) {
+    try {
+      if (fs.existsSync(statusPath)) {
+        const raw = fs.readFileSync(statusPath, 'utf8').replace(/^\uFEFF/, '').trim();
+        if (raw) {
+          const payload = JSON.parse(raw);
+          if (payload && typeof payload === 'object') {
+            const stage = String(payload.stage || '').trim().toLowerCase();
+            const hasSignal = stage === 'started'
+              || stage === 'applied'
+              || stage === 'final'
+              || payload.preStart === true
+              || payload.launchFailed === true
+              || payload.ok === true;
+            if (hasSignal) return { seen: true, payload };
+          }
+        }
+      }
+    } catch {
+      // ignore and keep waiting
+    }
+    await waitMs(120);
+  }
+
+  return { seen: false, payload: null };
 }
 
 function confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, logPrefix = 'UPDATE ASAR fallback') {
@@ -2204,6 +2286,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
       if (!launched) {
         appendFocusLog(`UPDATE Could not launch ASAR updater: ${patchPath}`);
         if (allowBinaryFallback) {
+          asarFailedButCanFallback = true;
           appendFocusLog('UPDATE ASAR launcher failed; falling back to binary installer');
           send({
             text: 'No se pudo iniciar parche ASAR. Intentando instalador del launcher...',
@@ -2223,26 +2306,55 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
           return { updateAvailable: true, failed: true, error: 'No se pudo iniciar actualizacion ASAR.' };
         }
       } else {
-        if (latestMarker) {
-          store.set('lastUpdateAttemptMarker', latestMarker);
-          store.set('lastUpdateAttemptAt', Date.now());
-          store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
-          store.set('lastUpdateAttemptPatchPath', patchPath);
-          store.set('lastUpdateAttemptPatchSha1', patchSha1);
-          store.set('lastUpdateAttemptNeedsRetry', false);
-          clearBinaryAttemptFingerprint();
+        const handshake = await waitForAsarUpdaterHandshake(statusPath, asarNeedsElevation ? 30000 : 2500);
+        const launchFailedFromStatus = !!(handshake.payload && handshake.payload.launchFailed === true);
+        if (!handshake.seen || launchFailedFromStatus) {
+          const launchReason = launchFailedFromStatus
+            ? String(handshake.payload.error || '').trim()
+            : 'Updater sin handshake de inicio.';
+          appendFocusLog(`UPDATE ASAR updater handshake failed: ${launchReason || '<unknown>'}`);
+          if (allowBinaryFallback) {
+            asarFailedButCanFallback = true;
+            appendFocusLog('UPDATE ASAR handshake failed; falling back to binary installer');
+            send({
+              text: 'No se pudo confirmar inicio del parche ASAR. Intentando instalador del launcher...',
+              phase: 'checking',
+              showProgress: true,
+              progress: null,
+              indeterminate: true
+            });
+          } else {
+            send({
+              text: 'No se pudo confirmar el inicio del parche del launcher.',
+              phase: 'error',
+              showProgress: false,
+              progress: null,
+              indeterminate: false
+            });
+            return { updateAvailable: true, failed: true, error: launchReason || 'No se pudo confirmar inicio del parche ASAR.' };
+          }
+        } else {
+          if (latestMarker) {
+            store.set('lastUpdateAttemptMarker', latestMarker);
+            store.set('lastUpdateAttemptAt', Date.now());
+            store.set('lastUpdateAttemptCount', lastAttemptMarker === latestMarker ? (lastAttemptCount + 1) : 1);
+            store.set('lastUpdateAttemptPatchPath', patchPath);
+            store.set('lastUpdateAttemptPatchSha1', patchSha1);
+            store.set('lastUpdateAttemptNeedsRetry', false);
+            clearBinaryAttemptFingerprint();
+          }
+          appendFocusLog(`UPDATE ASAR updater handshake confirmed: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
+          send({
+            text: asarNeedsElevation
+              ? 'Parche descargado. Esperando permisos y reinicio del launcher...'
+              : 'Parche aplicado. Reiniciando launcher...',
+            phase: 'installing',
+            progress: 100,
+            indeterminate: true,
+            showProgress: true
+          });
+          return { installing: true, version: latestVersion, mode: asarNeedsElevation ? 'asar-elevated' : 'asar' };
         }
-        appendFocusLog(`UPDATE ASAR updater launched: ${patchPath} elevated=${asarNeedsElevation ? 'yes' : 'no'} retryElevation=${shouldForceElevationRetry ? 'yes' : 'no'}`);
-        send({
-          text: asarNeedsElevation
-            ? 'Parche descargado. Esperando permisos y reinicio del launcher...'
-            : 'Parche aplicado. Reiniciando launcher...',
-          phase: 'installing',
-          progress: 100,
-          indeterminate: true,
-          showProgress: true
-        });
-        return { installing: true, version: latestVersion, mode: asarNeedsElevation ? 'asar-elevated' : 'asar' };
       }
     }
   }
@@ -4917,4 +5029,5 @@ ipcMain.on('launch-game', async (event, instanceId) => {
       event.sender.send('launch-error', err ? `${String(err)}${details}` : `Error al iniciar.${details}`);
     });
 });
+
 
