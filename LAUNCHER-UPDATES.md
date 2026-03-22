@@ -2,66 +2,64 @@
 
 ## ES (Espanol)
 
-### Base del sistema (estilo produccion)
-- Motor por defecto: `legacy + asar` (no requiere subir a `1.0.1` para parches chicos).
-- Verificacion de integridad: el launcher valida `SHA256` del parche `.asar` si existe digest en release o archivo `.sha256`.
-- Anti-loop: para parches de misma version, se desactiva fallback binario automatico y se aplica cooldown de reintentos.
-- Rollout controlado: se mantiene el gate de aprobacion (`XENO_PUBLIC_UPDATE`) para publicar cuando tu quieras.
+### Base del sistema (produccion)
+- Motor por defecto: `legacy + binary` (setup/portable), pensado para evitar fallos de parcheo en caliente.
+- Deteccion de update: por `marker` de assets (misma version `1.0.0` permitida).
+- Integridad: se valida `SHA256` cuando el release trae digest/archivo `.sha256`.
+- Rollout controlado: se mantiene gate de aprobacion (`XENO_PUBLIC_UPDATE`).
 
 ### Defaults actuales
 - `XENO_UPDATE_ENGINE=legacy` (default)
-- `XENO_UPDATE_STRATEGY=asar` (default)
+- `XENO_UPDATE_STRATEGY=binary` (default)
 - `XENO_UPDATE_MODE=auto` (default)
 
-### Publicar un parche pequeno (misma version)
-1. Genera el asset:
+### Flujo recomendado (misma version)
+1. Genera build de release:
 ```bash
-npm run build:asar-asset
+npm run build:release:win
 ```
-2. Sube a la release estos dos archivos:
-- `XenoLauncher-App-1.0.0.asar`
-- `XenoLauncher-App-1.0.0.asar.sha256`
+2. Sube a la release:
+- `XenoLauncher-Setup-1.0.0.exe`
+- `XenoLauncher-Portable-1.0.0.exe` (si usas portable)
+3. El launcher descargara el binario en segundo plano y aplicara update sin subir a `1.0.1`.
 
-Con eso, los clientes actualizan sin cambiar a `1.0.1`.
+### Opcional: parche ASAR
+- Sigue soportado con `XENO_UPDATE_STRATEGY=asar`.
+- Solo recomendado para entornos controlados.
 
 ### Recomendacion fuerte
-- No reescribas assets ya publicados en una release en produccion.
-- Publica nuevos assets/builds de forma inmutable para evitar estados inconsistentes entre usuarios.
-
-### Binarios (setup/portable)
-- `XenoLauncher-Setup-1.0.0.exe` y `XenoLauncher-Portable-1.0.0.exe` quedan para reinstalacion/manual.
-- En parches de misma version, el flujo principal debe ser `.asar`.
+- No reescribas assets ya publicados en produccion.
+- Publica artifacts inmutables para evitar inconsistencias entre usuarios.
 
 ---
 
 ## EN (English)
 
-### Production-style baseline
-- Default engine: `legacy + asar` (no need to bump to `1.0.1` for small patches).
-- Integrity verification: launcher validates patch `SHA256` when release digest or `.sha256` sidecar exists.
-- Anti-loop: for same-version patches, automatic binary fallback is disabled and retry cooldown is applied.
-- Controlled rollout: approval gate (`XENO_PUBLIC_UPDATE`) remains in place.
+### Production baseline
+- Default engine: `legacy + binary` (setup/portable) to avoid hot-patch instability.
+- Update detection: asset-based `marker` (same version `1.0.0` is supported).
+- Integrity: `SHA256` verification is used when digest/sidecar `.sha256` exists.
+- Controlled rollout: approval gate (`XENO_PUBLIC_UPDATE`) remains enabled.
 
 ### Current defaults
 - `XENO_UPDATE_ENGINE=legacy` (default)
-- `XENO_UPDATE_STRATEGY=asar` (default)
+- `XENO_UPDATE_STRATEGY=binary` (default)
 - `XENO_UPDATE_MODE=auto` (default)
 
-### Publish a small patch (same version)
-1. Build asset:
+### Recommended flow (same version)
+1. Build release:
 ```bash
-npm run build:asar-asset
+npm run build:release:win
 ```
-2. Upload both files to the release:
-- `XenoLauncher-App-1.0.0.asar`
-- `XenoLauncher-App-1.0.0.asar.sha256`
+2. Upload to release:
+- `XenoLauncher-Setup-1.0.0.exe`
+- `XenoLauncher-Portable-1.0.0.exe` (if portable mode is used)
+3. Launcher downloads binary in background and updates without bumping to `1.0.1`.
 
-Clients can update without moving to `1.0.1`.
+### Optional: ASAR patching
+- Still supported with `XENO_UPDATE_STRATEGY=asar`.
+- Recommended only for controlled environments.
 
 ### Strong recommendation
-- Do not overwrite already-published assets in production releases.
-- Publish immutable build artifacts to avoid inconsistent client states.
-
-### Binary artifacts (setup/portable)
-- `XenoLauncher-Setup-1.0.0.exe` and `XenoLauncher-Portable-1.0.0.exe` remain for reinstall/manual use.
-- For same-version patches, `.asar` should be the primary path.
+- Do not overwrite already-published assets in production.
+- Publish immutable artifacts to avoid inconsistent client state.

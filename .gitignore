@@ -6,3 +6,5 @@ dist-test/
 *.log
 cloudflared.exe
 build/icon-256.png
+
+.codex_tmp*

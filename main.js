@@ -156,8 +156,8 @@ const UPDATE_MANIFEST_URL = String(process.env.XENO_UPDATE_MANIFEST_URL || '').t
 const UPDATE_REPO_OVERRIDE = String(process.env.XENO_UPDATE_REPO || '').trim();
 const UPDATE_MODE = String(process.env.XENO_UPDATE_MODE || 'auto').trim().toLowerCase();
 const UPDATE_ENGINE = String(process.env.XENO_UPDATE_ENGINE || 'legacy').trim().toLowerCase();
-const UPDATE_STRATEGY_RAW = String(process.env.XENO_UPDATE_STRATEGY || 'asar').trim().toLowerCase();
-const UPDATE_STRATEGY = ['auto', 'asar', 'binary'].includes(UPDATE_STRATEGY_RAW) ? UPDATE_STRATEGY_RAW : 'asar';
+const UPDATE_STRATEGY_RAW = String(process.env.XENO_UPDATE_STRATEGY || 'binary').trim().toLowerCase();
+const UPDATE_STRATEGY = ['auto', 'asar', 'binary'].includes(UPDATE_STRATEGY_RAW) ? UPDATE_STRATEGY_RAW : 'binary';
 const UPDATE_INCLUDE_PRERELEASE = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_INCLUDE_PRERELEASE || '').trim());
 const UPDATE_REQUIRE_APPROVAL = !/^(0|false|no)$/i.test(String(process.env.XENO_UPDATE_REQUIRE_APPROVAL || 'true').trim());
 const UPDATE_ALLOW_UNAPPROVED = /^(1|true|yes)$/i.test(String(process.env.XENO_UPDATE_ALLOW_UNAPPROVED || '').trim());
@@ -172,6 +172,7 @@ const UPDATE_BINARY_RECOVERY_ATTEMPTS = Number.isFinite(parsedBinaryRecoveryAtte
 const UPDATE_MIN_ASAR_BYTES = 128 * 1024;
 const UPDATE_STATUS_ASAR_FILE = 'asar-update-status.json';
 const UPDATE_STATUS_BINARY_FILE = 'binary-update-status.json';
+const UPDATE_HANDSHAKE_BINARY_FILE = 'binary-update-handshake.json';
 const UPDATE_BINARY_FINGERPRINT_FALLBACK_MS = 30 * 60 * 1000;
 const UPDATE_SAME_VERSION_RETRY_COOLDOWN_MS = 60 * 60 * 1000;
 const ADDON_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -583,14 +584,12 @@ function buildPreferredUpdateMarkerFromAssets(assets, options = {}) {
   const normalized = normalizeReleaseAssets(assets);
   if (normalized.length === 0) return 'no-assets';
 
-  const asarPreferred = selectAsarUpdateAsset(normalized);
-  if (asarPreferred) {
-    return `asar:${buildReleaseAssetsMarker([asarPreferred])}`;
-  }
-
   const strategyRaw = String(options.strategy || UPDATE_STRATEGY || 'binary').trim().toLowerCase();
   const strategy = ['auto', 'asar', 'binary'].includes(strategyRaw) ? strategyRaw : 'binary';
-  const preferAsar = strategy !== 'binary';
+  const asarPreferred = selectAsarUpdateAsset(normalized);
+  if ((strategy === 'asar' || strategy === 'auto') && asarPreferred) {
+    return `asar:${buildReleaseAssetsMarker([asarPreferred])}`;
+  }
 
   if (process.platform === 'win32') {
     const windowsMode = String(options.windowsMode || getWindowsUpdateMode() || '').trim().toLowerCase();
@@ -608,7 +607,6 @@ function buildPreferredUpdateMarkerFromAssets(assets, options = {}) {
 
   return `all:${buildReleaseAssetsMarker(normalized)}`;
 }
-
 function sha1File(filePath) {
   try {
     const full = path.resolve(String(filePath || '').trim());
@@ -988,11 +986,12 @@ function psEncode(script) {
   return Buffer.from(String(script || ''), 'utf16le').toString('base64');
 }
 
-function buildInstallerApplyScript({ installerPath, statusPath, marker, exePath, launcherPid }) {
+function buildInstallerApplyScript({ installerPath, statusPath, handshakePath, marker, exePath, launcherPid }) {
   const launcherPidValue = Number.isFinite(Number(launcherPid)) ? Math.max(0, Math.trunc(Number(launcherPid))) : 0;
   return [
     `$installer=${psQuote(installerPath)}`,
     `$status=${psQuote(statusPath)}`,
+    `$handshake=${psQuote(handshakePath)}`,
     `$marker=${psQuote(String(marker || ''))}`,
     `$exe=${psQuote(exePath)}`,
     `$launcherPid=${launcherPidValue}`,
@@ -1002,6 +1001,11 @@ function buildInstallerApplyScript({ installerPath, statusPath, marker, exePath,
     '$started=$false',
     '$exitCode=$null',
     '$isMsi=$installer.ToLower().EndsWith(".msi")',
+    'try {',
+    '  $handshakePayload = @{ handshake = $true; marker = $marker; mode = "setup"; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
+    '  New-Item -ItemType Directory -Path (Split-Path -Parent $handshake) -Force | Out-Null',
+    '  Set-Content -LiteralPath $handshake -Value $handshakePayload -Encoding UTF8 -Force',
+    '} catch {}',
     'if($launcherPid -gt 0){',
     '  for($k=0;$k -lt 240;$k++){',
     '    try {',
@@ -1014,7 +1018,7 @@ function buildInstallerApplyScript({ installerPath, statusPath, marker, exePath,
     '  }',
     '}',
     'Start-Sleep -Milliseconds 300',
-    '$argSets = @(@("/S"), @("/SILENT"), @("/silent"), @())',
+    '$argSets = @(@("--updated", "/S", "--force-run"), @("--updated", "/S"), @("/S"), @("/SILENT"), @("/silent"), @())',
     'if($isMsi){ $argSets = @(@("/i", $installer, "/passive")) }',
     'foreach($argSet in $argSets){',
     '  try {',
@@ -1051,7 +1055,7 @@ function buildInstallerApplyScript({ installerPath, statusPath, marker, exePath,
     '  } catch {}',
     '  Start-Sleep -Milliseconds 350',
     '  try {',
-      '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ErrorAction Stop | Out-Null',
+    '    Start-Process -FilePath $exe -WorkingDirectory (Split-Path -Parent $exe) -ErrorAction Stop | Out-Null',
     '    $started=$true',
     '  } catch {',
     '    $restartError = [string]$_.Exception.Message',
@@ -1069,12 +1073,16 @@ function launchInstaller(installerPath, statusFilePath, marker = '', options = {
   try {
     const installer = path.resolve(String(installerPath || '').trim());
     const statusPath = path.resolve(String(statusFilePath || '').trim());
+    const handshakePath = path.resolve(String(options && options.handshakePath
+      ? options.handshakePath
+      : path.join(path.dirname(statusPath), UPDATE_HANDSHAKE_BINARY_FILE)).trim());
     const exePath = path.resolve(app.getPath('exe'));
     const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
-    if (!installer || !statusPath || !exePath) return false;
+    if (!installer || !statusPath || !handshakePath || !exePath) return false;
     const script = buildInstallerApplyScript({
       installerPath: installer,
       statusPath,
+      handshakePath,
       marker,
       exePath,
       launcherPid
@@ -1091,6 +1099,39 @@ function launchInstaller(installerPath, statusFilePath, marker = '', options = {
     ]);
   } catch {
     return false;
+  }
+}
+
+function launchInstallerDirect(installerPath) {
+  try {
+    const installer = path.resolve(String(installerPath || '').trim());
+    if (!installer) return { ok: false, error: 'invalid_installer_path' };
+
+    const ext = path.extname(installer).toLowerCase();
+    if (ext === '.msi') {
+      const msiLaunch = spawnDetachedDetailed('msiexec.exe', ['/i', installer, '/passive']);
+      if (msiLaunch.ok) return { ok: true, method: 'msiexec', args: '/i /passive' };
+      return { ok: false, error: String(msiLaunch.error || 'msiexec_failed') };
+    }
+
+    const argSets = [
+      ['--updated', '/S', '--force-run'],
+      ['--updated', '/S'],
+      ['/S'],
+      []
+    ];
+    let lastError = '';
+    for (const argSet of argSets) {
+      const launched = spawnDetachedDetailed(installer, argSet);
+      if (launched.ok) {
+        return { ok: true, method: 'direct', args: argSet.length ? argSet.join(' ') : '<none>' };
+      }
+      lastError = String(launched.error || 'spawn_failed');
+    }
+
+    return { ok: false, error: lastError || 'spawn_failed' };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err || 'launch_failed') };
   }
 }
 
@@ -1423,6 +1464,39 @@ async function waitForAsarUpdaterHandshake(statusFilePath, timeoutMs = 3000) {
   return { seen: false, payload: null };
 }
 
+async function waitForBinaryUpdaterHandshake(handshakeFilePath, timeoutMs = 3500) {
+  const handshakePath = path.resolve(String(handshakeFilePath || '').trim());
+  if (!handshakePath) return { seen: false, payload: null };
+
+  const deadline = Date.now() + Math.max(500, Number(timeoutMs) || 0);
+  while (Date.now() <= deadline) {
+    try {
+      if (fs.existsSync(handshakePath)) {
+        let payload = null;
+        try {
+          const raw = fs.readFileSync(handshakePath, 'utf8').replace(/^\uFEFF/, '').trim();
+          payload = raw ? JSON.parse(raw) : null;
+        } catch {
+          payload = null;
+        }
+
+        try {
+          fs.unlinkSync(handshakePath);
+        } catch {
+          // ignore
+        }
+
+        return { seen: true, payload };
+      }
+    } catch {
+      // ignore and keep waiting
+    }
+    await waitMs(120);
+  }
+
+  return { seen: false, payload: null };
+}
+
 function confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, logPrefix = 'UPDATE ASAR fallback') {
   const marker = String(attemptMarker || '').trim();
   const patchSha1Value = String(attemptPatchSha1 || '').trim().toLowerCase();
@@ -1557,6 +1631,7 @@ function consumeBinaryUpdateStatus() {
       ? String(payload.error || payload.restartError || `Installer exit code ${payload.exitCode}`)
       : '';
     store.set('lastUpdateAttemptAt', Date.now());
+    store.set('lastUpdateAttemptNeedsRetry', true);
     if (reason) {
       appendFocusLog(`UPDATE BIN status indicates failure: ${reason}`);
     } else {
@@ -1923,7 +1998,8 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     Date.now() - lastAttemptAt < 5 * 60 * 1000 &&
     !hasAttemptHashMismatch &&
     !hasUnknownAttemptHash &&
-    !hasPendingAsarAttempt
+    !hasPendingAsarAttempt &&
+    !lastAttemptNeedsRetry
   ) {
     appendFocusLog(`UPDATE Recent attempt detected for marker ${latestMarker}; skipping to avoid restart loop`);
     send({
@@ -2008,13 +2084,9 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
 
   appendFocusLog(`UPDATE Strategy=${UPDATE_STRATEGY}`);
   const asarAsset = selectAsarUpdateAsset(latest.assets);
-  const hasSameVersionPatch = !!(sameVersionMarkerUpdate && asarAsset);
   const preferAsarFlow = UPDATE_STRATEGY === 'asar'
-    || UPDATE_STRATEGY === 'auto'
-    || (UPDATE_STRATEGY === 'binary' && hasSameVersionPatch);
-  if (hasSameVersionPatch && UPDATE_STRATEGY === 'binary') {
-    appendFocusLog('UPDATE Same-version marker change detected; forcing ASAR-first flow');
-  }
+    ? !!asarAsset
+    : (UPDATE_STRATEGY === 'auto' ? !!asarAsset : false);
   const currentAsarPath = getCurrentAppAsarPath();
   const canWriteAsar = !!currentAsarPath && hasDirectoryWriteAccess(path.dirname(currentAsarPath));
   const isRetrySameMarker = !!(
@@ -2035,23 +2107,25 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     lastAttemptCount >= UPDATE_BINARY_RECOVERY_ATTEMPTS
   );
   const allowBinaryFallbackBase = UPDATE_ALLOW_BINARY_FALLBACK || shouldUseBinaryRecovery || UPDATE_STRATEGY === 'binary';
-  const allowBinaryFallback = sameVersionMarkerUpdate ? false : allowBinaryFallbackBase;
+  const allowBinaryFallback = sameVersionMarkerUpdate
+    ? (UPDATE_STRATEGY === 'binary' || UPDATE_ALLOW_BINARY_FALLBACK)
+    : allowBinaryFallbackBase;
   if (shouldUseBinaryRecovery) {
     appendFocusLog(`UPDATE Binary recovery enabled for marker ${latestMarker} after ${lastAttemptCount} failed ASAR attempts`);
   }
-  if (sameVersionMarkerUpdate && allowBinaryFallbackBase) {
-    appendFocusLog('UPDATE Binary fallback disabled for same-version patch strategy');
+  if (sameVersionMarkerUpdate && allowBinaryFallback) {
+    appendFocusLog('UPDATE Same-version binary update enabled');
   }
-  if (!hasVersionUpdate && hasMarkerUpdate && !asarAsset) {
-    appendFocusLog('UPDATE Same-version release without ASAR patch; binary same-version update skipped');
+  if (!hasVersionUpdate && hasMarkerUpdate && !asarAsset && !allowBinaryFallback) {
+    appendFocusLog('UPDATE Same-version release without compatible update asset');
     send({
-      text: 'Build detectada (misma version), pero falta parche .asar para aplicar update automatica.',
+      text: 'Build detectada (misma version), pero falta paquete de actualizacion compatible.',
       phase: 'manual',
       showProgress: false,
       progress: null,
       indeterminate: false
     });
-    return { updateAvailable: true, manual: true, version: latestVersion, reason: 'same_version_without_asar' };
+    return { updateAvailable: true, manual: true, version: latestVersion, reason: 'same_version_without_compatible_asset' };
   }
   if (!preferAsarFlow && asarAsset) {
     appendFocusLog(`UPDATE ASAR flow skipped by strategy (${UPDATE_STRATEGY})`);
@@ -2436,10 +2510,12 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   const updatesDir = path.join(app.getPath('userData'), 'updates');
   ensureDir(updatesDir);
   const statusPath = path.join(updatesDir, UPDATE_STATUS_BINARY_FILE);
+  const handshakePath = path.join(updatesDir, UPDATE_HANDSHAKE_BINARY_FILE);
   const installerPath = path.join(updatesDir, sanitizeFileName(selectedAsset.name));
   appendFocusLog(`UPDATE Asset selected (${winUpdateMode}): ${selectedAsset.name}`);
   try {
     if (fs.existsSync(statusPath)) fs.unlinkSync(statusPath);
+    if (fs.existsSync(handshakePath)) fs.unlinkSync(handshakePath);
     if (fs.existsSync(installerPath)) fs.unlinkSync(installerPath);
   } catch {
     // ignore
@@ -2520,7 +2596,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   saveBinaryAttemptFingerprint();
   const launched = winUpdateMode === 'portable'
     ? launchPortableSelfUpdater(installerPath, statusPath, latestMarker, { launcherPid: process.pid })
-    : launchInstaller(installerPath, statusPath, latestMarker, { launcherPid: process.pid });
+    : launchInstaller(installerPath, statusPath, latestMarker, { launcherPid: process.pid, handshakePath });
   if (!launched) {
     clearBinaryAttemptFingerprint();
     appendFocusLog(`UPDATE Could not launch installer ${installerPath}`);
@@ -2534,7 +2610,36 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { updateAvailable: true, failed: true, error: 'No se pudo iniciar el instalador.' };
   }
 
-  appendFocusLog(`UPDATE Installer launched: ${installerPath} mode=${winUpdateMode}`);
+  let binaryLaunchMethod = winUpdateMode === 'portable' ? 'portable-script' : 'setup-script';
+  let binaryLaunchArgs = '';
+  if (winUpdateMode === 'setup') {
+    const handshake = await waitForBinaryUpdaterHandshake(handshakePath, 3500);
+    if (!handshake.seen) {
+      appendFocusLog('UPDATE BIN updater handshake failed; trying direct installer launch');
+      const directLaunch = launchInstallerDirect(installerPath);
+      if (!directLaunch.ok) {
+        clearBinaryAttemptFingerprint();
+        appendFocusLog(`UPDATE BIN direct launch failed: ${directLaunch.error || 'unknown'}`);
+        send({
+          text: 'No se pudo iniciar el instalador.',
+          phase: 'error',
+          showProgress: false,
+          progress: null,
+          indeterminate: false
+        });
+        return { updateAvailable: true, failed: true, error: 'No se pudo iniciar el instalador.' };
+      }
+      binaryLaunchMethod = `setup-${directLaunch.method || 'direct'}`;
+      binaryLaunchArgs = String(directLaunch.args || '');
+    } else {
+      const stage = handshake.payload && typeof handshake.payload === 'object'
+        ? String(handshake.payload.stage || handshake.payload.mode || 'ready')
+        : 'ready';
+      appendFocusLog(`UPDATE BIN updater handshake confirmed: stage=${stage}`);
+    }
+  }
+
+  appendFocusLog(`UPDATE Installer launched: ${installerPath} mode=${winUpdateMode} method=${binaryLaunchMethod}${binaryLaunchArgs ? ` args=${binaryLaunchArgs}` : ''}`);
   if (latestMarker) {
     store.set('lastUpdateAttemptMarker', latestMarker);
     store.set('lastUpdateAttemptAt', Date.now());
@@ -3837,7 +3942,7 @@ function stageLabel(type) {
     case 'assets-copy':
       return 'Preparando assets...';
     case 'libraries':
-      return 'Descargando librerías...';
+      return 'Descargando librerÃƒÆ’Ã‚Â­as...';
     case 'classes':
       return 'Descargando clases...';
     case 'classes-custom':
@@ -3895,7 +4000,7 @@ function applyLoaderOverrides(opts, loader) {
 async function runInstallOnly(event, inst, list, options = {}) {
   const loader = String(inst.loader || 'Vanilla');
   if (!['Vanilla', 'Forge', 'NeoForge', 'Fabric', 'Snapshots'].includes(loader)) {
-    throw new Error('Este loader no está soportado por ahora.');
+    throw new Error('Este loader no estÃƒÆ’Ã‚Â¡ soportado por ahora.');
   }
 
   inst.addons = normalizeAddonSelection(inst.addons);
@@ -3907,7 +4012,7 @@ async function runInstallOnly(event, inst, list, options = {}) {
       required: javaSelection.required,
       maxAllowed: javaSelection.maxAllowed
     });
-    throw new Error(`No se encontró un Java compatible para Minecraft ${inst.version}.`);
+    throw new Error(`No se encontrÃƒÆ’Ã‚Â³ un Java compatible para Minecraft ${inst.version}.`);
   }
   const javaPath = javaSelection.path;
 
@@ -4662,7 +4767,7 @@ ipcMain.on('set-java-path', async (event, data) => {
 
 ipcMain.on('install-instance', async (event, data) => {
   if (!data || !data.name || !data.version) {
-    event.sender.send('install-error', 'Datos inválidos');
+    event.sender.send('install-error', 'Datos invÃƒÆ’Ã‚Â¡lidos');
     return;
   }
 
@@ -4699,7 +4804,7 @@ ipcMain.on('install-instance', async (event, data) => {
   }
 
   if (activeInstalls.has(clean.id)) {
-    event.sender.send('install-error', 'Esta instancia ya se está descargando.');
+    event.sender.send('install-error', 'Esta instancia ya se estÃƒÆ’Ã‚Â¡ descargando.');
     return;
   }
 
@@ -4753,11 +4858,11 @@ ipcMain.on('open-external', async (event, url) => {
 
 ipcMain.on('launch-game', async (event, instanceId) => {
   if (activeLaunches.has(instanceId)) {
-    event.sender.send('launch-error', 'Ya se está abriendo esta instancia.');
+    event.sender.send('launch-error', 'Ya se estÃƒÆ’Ã‚Â¡ abriendo esta instancia.');
     return;
   }
   if (activeInstalls.has(instanceId)) {
-    event.sender.send('launch-error', 'La instancia todavía se está descargando.');
+    event.sender.send('launch-error', 'La instancia todavÃƒÆ’Ã‚Â­a se estÃƒÆ’Ã‚Â¡ descargando.');
     return;
   }
 
@@ -4770,7 +4875,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
 
   const loader = String(inst.loader || 'Vanilla');
   if (!['Vanilla', 'Forge', 'NeoForge', 'Fabric', 'Snapshots'].includes(loader)) {
-    event.sender.send('launch-error', 'Este loader no está soportado por ahora.');
+    event.sender.send('launch-error', 'Este loader no estÃƒÆ’Ã‚Â¡ soportado por ahora.');
     return;
   }
 
@@ -4781,7 +4886,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
       required: javaSelection.required,
       maxAllowed: javaSelection.maxAllowed
     });
-    event.sender.send('launch-error', `No se encontró un Java compatible para Minecraft ${inst.version}.`);
+    event.sender.send('launch-error', `No se encontrÃƒÆ’Ã‚Â³ un Java compatible para Minecraft ${inst.version}.`);
     return;
   }
   const javaPath = javaSelection.path;
@@ -4813,7 +4918,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
 
   if (needsInstall) {
     if (activeInstalls.has(inst.id)) {
-      event.sender.send('launch-error', 'La instancia todavía se está descargando.');
+      event.sender.send('launch-error', 'La instancia todavÃƒÆ’Ã‚Â­a se estÃƒÆ’Ã‚Â¡ descargando.');
       return;
     }
     activeInstalls.set(inst.id, true);
@@ -4985,7 +5090,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
         const early = Date.now() - launchStart < 15000;
         if (early) {
           const details = lastDebug ? `\nDetalle: ${lastDebug}` : '';
-          event.sender.send('launch-error', `Minecraft se cerró al iniciar (código ${code}).${details}`);
+          event.sender.send('launch-error', `Minecraft se cerrÃƒÆ’Ã‚Â³ al iniciar (cÃƒÆ’Ã‚Â³digo ${code}).${details}`);
         }
       });
       child.on('error', (err) => {
