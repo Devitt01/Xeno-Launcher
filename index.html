@@ -778,6 +778,17 @@
                 <div class="spinner"></div>
             </div>
         </div>
+        <div id="modal-confidential-notice" class="modal-overlay">
+            <div class="modal-content" style="max-width: 520px;">
+                <div class="modal-header">
+                    <h3>Aviso</h3>
+                </div>
+                <p style="color: var(--text-dim); line-height: 1.45; margin-bottom: 18px;">
+                    esta es una test que se le paso a personas especificas y es confidencial
+                </p>
+                <button class="action-btn" onclick="closeModal('modal-confidential-notice')">Entendido</button>
+            </div>
+        </div>
         <div id="toast-container"></div>
     </div>
 
@@ -799,6 +810,7 @@
         let installingInstanceId = null;
         let pendingCreateData = null;
         let javaPathSetting = '';
+        let launchRequestPending = false;
 
         let skinCanvas = null;
         let skinCtx = null;
@@ -1671,6 +1683,7 @@
                 sodiumInput.addEventListener('change', (e) => setAddonState('sodium', e.target.checked));
             }
             refreshAddonOptions();
+            openModal('modal-confidential-notice');
         };
 
         api && api.on && api.on('instances-list', (event, list) => {
@@ -1737,11 +1750,13 @@
             closeModal('modal-installing');
             showToast("Error: " + msg, "error");
             installingInstanceId = null;
+            setLaunchRequestPending(false);
         });
 
         api && api.on && api.on('install-progress', (event, data) => {
             if (!data) return;
             if (data.id !== currentInstanceId && data.id !== installingInstanceId) return;
+            closeModal('modal-opening');
             document.getElementById('install-progress-fill').style.width = `${data.progress || 0}%`;
             document.getElementById('install-progress-text').innerText = `${data.progress || 0}%`;
             if (data.stage) document.getElementById('install-stage').innerText = data.stage;
@@ -1758,6 +1773,7 @@
             if (data.installOnly) {
                 showToast(data.source === 'launch' ? "Instalado. Vuelve a jugar." : "Descarga completa.", "success");
                 installingInstanceId = null;
+                setLaunchRequestPending(false);
                 return;
             }
             showToast("Instalacion completa.", "success");
@@ -1774,6 +1790,7 @@
             if (!data || data.id !== currentInstanceId) return;
             closeModal('modal-opening');
             showToast("Minecraft iniciado.", "success");
+            setLaunchRequestPending(false);
         });
 
         api && api.on && api.on('launch-error', (event, msg) => {
@@ -1781,6 +1798,7 @@
             closeModal('modal-opening');
             showToast(msg || "Error al iniciar.", "error");
             installingInstanceId = null;
+            setLaunchRequestPending(false);
         });
 
         api && api.on && api.on('vanilla-versions', (event, list) => {
@@ -2082,6 +2100,21 @@
             }
         }
 
+        function setLaunchRequestPending(value) {
+            launchRequestPending = !!value;
+            const btnPlay = document.getElementById('btn-play');
+            if (!btnPlay) return;
+            if (launchRequestPending) {
+                btnPlay.classList.add('is-disabled');
+                btnPlay.disabled = true;
+                btnPlay.setAttribute('aria-busy', 'true');
+            } else {
+                btnPlay.classList.remove('is-disabled');
+                btnPlay.disabled = false;
+                btnPlay.removeAttribute('aria-busy');
+            }
+        }
+
         function setAddonState(addonKey, enabled) {
             if (addonKey !== 'optifine' && addonKey !== 'sodium') return;
             selectedAddons[addonKey] = !!enabled;
@@ -2159,11 +2192,20 @@
         }
 
         function requestLaunch() {
+            if (launchRequestPending) return;
             if(!currentInstanceId) return showToast("Selecciona instancia", "error");
             const inst = instances.find(i => i.id === currentInstanceId);
             if(!inst) return;
+            setLaunchRequestPending(true);
             closeAllModals();
-            if (api && api.send) api.send('launch-game', currentInstanceId);
+            openModal('modal-opening');
+            if (api && api.send) {
+                api.send('launch-game', currentInstanceId);
+            } else {
+                closeModal('modal-opening');
+                setLaunchRequestPending(false);
+                showToast("No se pudo iniciar.", "error");
+            }
         }
 
         function switchView(viewName, e) {

@@ -566,11 +566,34 @@ function normalizeReleaseAssets(assets) {
 function buildReleaseAssetsMarker(assets) {
   const normalized = normalizeReleaseAssets(assets);
   if (normalized.length === 0) return 'no-assets';
+
+  const assetMarkerValue = (item) => {
+    const name = String(item && item.name ? item.name : '').trim().toLowerCase();
+    const sha256 = String(item && item.sha256 ? item.sha256 : '').trim().toLowerCase();
+    const sha512 = String(item && item.sha512 ? item.sha512 : '').trim().toLowerCase();
+    const digest = String(item && item.digest ? item.digest : '').trim().toLowerCase();
+    const size = Number(item && item.size ? item.size : 0) || 0;
+    const updatedAt = String(item && item.updatedAt ? item.updatedAt : '').trim().toLowerCase();
+    const url = String(item && item.url ? item.url : '').trim().toLowerCase();
+
+    if (sha256) return `${name}|sha256:${sha256}`;
+    if (sha512) return `${name}|sha512:${sha512}`;
+    if (digest) return `${name}|${digest}`;
+    if (size > 0) return `${name}|size:${size}`;
+    if (updatedAt || url) return `${name}|updated:${updatedAt}|url:${url}`;
+    return `${name}|unknown`;
+  };
+
   const raw = normalized
-    .map((item) => `${item.id}|${item.name}|${item.size}|${item.updatedAt}|${item.url}`)
+    .map((item) => assetMarkerValue(item))
     .sort()
     .join('\n');
   return crypto.createHash('sha1').update(raw).digest('hex');
+}
+
+function assetUpdatedTimestamp(asset) {
+  const value = Date.parse(String(asset && asset.updatedAt ? asset.updatedAt : '').trim());
+  return Number.isFinite(value) ? value : 0;
 }
 
 function getUpdateMarkerOptions() {
@@ -672,6 +695,11 @@ function readFileSha1(filePath) {
   return readWindowsFileHash(filePath, 'sha1').toLowerCase();
 }
 
+function readFileSha256(filePath) {
+  const direct = sha256File(filePath).toLowerCase();
+  if (direct) return direct;
+  return readWindowsFileHash(filePath, 'sha256').toLowerCase();
+}
 function parseSha256FromText(text) {
   const value = String(text || '').trim();
   if (!value) return '';
@@ -860,7 +888,15 @@ function selectWindowsSetupAsset(assets) {
     return value;
   };
 
-  list.sort((a, b) => score(b.name) - score(a.name));
+  list.sort((a, b) => {
+    const byScore = score(b.name) - score(a.name);
+    if (byScore !== 0) return byScore;
+
+    const byUpdated = assetUpdatedTimestamp(b) - assetUpdatedTimestamp(a);
+    if (byUpdated !== 0) return byUpdated;
+
+    return (b.size || 0) - (a.size || 0);
+  });
   return list[0];
 }
 
@@ -986,14 +1022,16 @@ function psEncode(script) {
   return Buffer.from(String(script || ''), 'utf16le').toString('base64');
 }
 
-function buildInstallerApplyScript({ installerPath, statusPath, handshakePath, marker, exePath, launcherPid }) {
+function buildInstallerApplyScript({ installerPath, statusPath, handshakePath, marker, exePath, installDir, launcherPid }) {
   const launcherPidValue = Number.isFinite(Number(launcherPid)) ? Math.max(0, Math.trunc(Number(launcherPid))) : 0;
+  const installDirValue = String(installDir || '').trim() || path.dirname(String(exePath || '').trim());
   return [
     `$installer=${psQuote(installerPath)}`,
     `$status=${psQuote(statusPath)}`,
     `$handshake=${psQuote(handshakePath)}`,
     `$marker=${psQuote(String(marker || ''))}`,
     `$exe=${psQuote(exePath)}`,
+    `$installDir=${psQuote(installDirValue)}`,
     `$launcherPid=${launcherPidValue}`,
     '$ok=$false',
     '$errorMessage=""',
@@ -1001,6 +1039,8 @@ function buildInstallerApplyScript({ installerPath, statusPath, handshakePath, m
     '$started=$false',
     '$exitCode=$null',
     '$isMsi=$installer.ToLower().EndsWith(".msi")',
+    '$dirArg=""',
+    'if($installDir){ $dirArg = "/D=" + $installDir }',
     'try {',
     '  $handshakePayload = @{ handshake = $true; marker = $marker; mode = "setup"; time = (Get-Date).ToString("o") } | ConvertTo-Json -Compress',
     '  New-Item -ItemType Directory -Path (Split-Path -Parent $handshake) -Force | Out-Null',
@@ -1018,8 +1058,20 @@ function buildInstallerApplyScript({ installerPath, statusPath, handshakePath, m
     '  }',
     '}',
     'Start-Sleep -Milliseconds 300',
-    '$argSets = @(@("--updated", "/S", "--force-run"), @("--updated", "/S"), @("/S"), @("/SILENT"), @("/silent"), @())',
-    'if($isMsi){ $argSets = @(@("/i", $installer, "/passive")) }',
+    '$argSets = @()',
+    'if($isMsi){',
+    '  if($installDir){',
+    '    $argSets = @(@("/i", $installer, "/passive", "TARGETDIR=" + $installDir))',
+    '  } else {',
+    '    $argSets = @(@("/i", $installer, "/passive"))',
+    '  }',
+    '} else {',
+    '  if($dirArg){',
+    '    $argSets = @(@("--updated", "/S", "--force-run", $dirArg), @("--updated", "/S", $dirArg), @("/S", $dirArg), @("/SILENT", $dirArg), @("/silent", $dirArg), @("--updated", $dirArg), @($dirArg), @())',
+    '  } else {',
+    '    $argSets = @(@("--updated", "/S", "--force-run"), @("--updated", "/S"), @("/S"), @("/SILENT"), @("/silent"), @())',
+    '  }',
+    '}',
     'foreach($argSet in $argSets){',
     '  try {',
     '    if($isMsi){',
@@ -1077,14 +1129,16 @@ function launchInstaller(installerPath, statusFilePath, marker = '', options = {
       ? options.handshakePath
       : path.join(path.dirname(statusPath), UPDATE_HANDSHAKE_BINARY_FILE)).trim());
     const exePath = path.resolve(app.getPath('exe'));
+    const installDir = path.resolve(String(options && options.installDir ? options.installDir : path.dirname(exePath)).trim());
     const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
-    if (!installer || !statusPath || !handshakePath || !exePath) return false;
+    if (!installer || !statusPath || !handshakePath || !exePath || !installDir) return false;
     const script = buildInstallerApplyScript({
       installerPath: installer,
       statusPath,
       handshakePath,
       marker,
       exePath,
+      installDir,
       launcherPid
     });
     const encodedScript = psEncode(script);
@@ -1102,24 +1156,40 @@ function launchInstaller(installerPath, statusFilePath, marker = '', options = {
   }
 }
 
-function launchInstallerDirect(installerPath) {
+function launchInstallerDirect(installerPath, options = {}) {
   try {
     const installer = path.resolve(String(installerPath || '').trim());
     if (!installer) return { ok: false, error: 'invalid_installer_path' };
 
+    const installDir = path.resolve(String(options && options.installDir ? options.installDir : path.dirname(app.getPath('exe'))).trim());
+    const dirArg = installDir ? '/D=' + installDir : '';
     const ext = path.extname(installer).toLowerCase();
     if (ext === '.msi') {
-      const msiLaunch = spawnDetachedDetailed('msiexec.exe', ['/i', installer, '/passive']);
-      if (msiLaunch.ok) return { ok: true, method: 'msiexec', args: '/i /passive' };
+      const msiArgs = installDir ? ['/i', installer, '/passive', 'TARGETDIR=' + installDir] : ['/i', installer, '/passive'];
+      const msiLaunch = spawnDetachedDetailed('msiexec.exe', msiArgs);
+      if (msiLaunch.ok) return { ok: true, method: 'msiexec', args: msiArgs.join(' ') };
       return { ok: false, error: String(msiLaunch.error || 'msiexec_failed') };
     }
 
-    const argSets = [
-      ['--updated', '/S', '--force-run'],
-      ['--updated', '/S'],
-      ['/S'],
-      []
-    ];
+    const argSets = dirArg
+      ? [
+        ['--updated', '/S', '--force-run', dirArg],
+        ['--updated', '/S', dirArg],
+        ['/S', dirArg],
+        ['/SILENT', dirArg],
+        ['/silent', dirArg],
+        ['--updated', dirArg],
+        [dirArg],
+        []
+      ]
+      : [
+        ['--updated', '/S', '--force-run'],
+        ['--updated', '/S'],
+        ['/S'],
+        ['/SILENT'],
+        ['/silent'],
+        []
+      ];
     let lastError = '';
     for (const argSet of argSets) {
       const launched = spawnDetachedDetailed(installer, argSet);
@@ -1521,10 +1591,11 @@ function consumeAsarUpdateStatus() {
     const attemptMarker = String(store.get('lastUpdateAttemptMarker', '') || '').trim();
     const attemptPatchPath = String(store.get('lastUpdateAttemptPatchPath', '') || '').trim();
     const attemptPatchSha1 = String(store.get('lastUpdateAttemptPatchSha1', '') || '').trim().toLowerCase();
+    const hasPendingAsarAttempt = !!(attemptMarker && (attemptPatchPath || attemptPatchSha1));
 
     if (!fs.existsSync(statusPath)) {
-      if (confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR fallback')) return;
-      if (attemptMarker) appendFocusLog(`UPDATE ASAR status file missing after relaunch for marker ${attemptMarker}`);
+      if (hasPendingAsarAttempt && confirmAsarUpdateByHash(attemptMarker, attemptPatchSha1, attemptPatchPath, 'UPDATE ASAR fallback')) return;
+      if (hasPendingAsarAttempt) appendFocusLog(`UPDATE ASAR status file missing after relaunch for marker ${attemptMarker}`);
       return;
     }
 
@@ -1964,6 +2035,27 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     attemptPatchReferenceSha1 !== currentAsarSha1
   );
 
+  if (
+    !hasVersionUpdate &&
+    hasMarkerUpdate &&
+    latestMarker &&
+    lastAttemptMarker === latestMarker
+  ) {
+    const asarAssetForVerification = selectAsarUpdateAsset(latest.assets);
+    if (asarAssetForVerification) {
+      const expectedAsarSha256 = await resolveAssetSha256FromReleaseAssets(latest.assets, asarAssetForVerification);
+      if (expectedAsarSha256) {
+        const installedAsarSha256 = readFileSha256(getCurrentAppAsarPath());
+        if (installedAsarSha256 && installedAsarSha256 === expectedAsarSha256) {
+          store.set('lastAppliedUpdateMarker', latestMarker);
+          clearPendingUpdateAttempt();
+          appendFocusLog(`UPDATE Same-version marker confirmed by ASAR sha256: ${latestMarker}`);
+          send({ text: 'Launcher actualizado.', phase: 'up-to-date', progress: 100, indeterminate: false });
+          return { upToDate: true, confirmedBy: 'asar_sha256' };
+        }
+      }
+    }
+  }
   if (!hasVersionUpdate && !hasMarkerUpdate) {
     appendFocusLog(`UPDATE Up to date (${current})`);
     if (lastAttemptMarker || lastAttemptPatchPath || lastAttemptPatchSha1) {
@@ -2584,6 +2676,26 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     return { updateAvailable: true, failed: true, error: String(err) };
   }
 
+  const expectedBinarySha256 = await resolveAssetSha256FromReleaseAssets(latest.assets, selectedAsset);
+  if (expectedBinarySha256) {
+    const downloadedBinarySha256 = sha256File(installerPath);
+    if (!downloadedBinarySha256 || downloadedBinarySha256 !== expectedBinarySha256) {
+      const errMsg = 'SHA256 mismatch (expected ' + expectedBinarySha256 + ', got ' + (downloadedBinarySha256 || '<empty>') + ')';
+      appendFocusLog('UPDATE BIN checksum failed: ' + errMsg);
+      send({
+        text: 'El instalador descargado no paso verificacion SHA256. Continuando...',
+        phase: 'error',
+        showProgress: false,
+        progress: null,
+        indeterminate: false
+      });
+      return { updateAvailable: true, failed: true, error: errMsg };
+    }
+    appendFocusLog('UPDATE BIN checksum verified sha256=' + downloadedBinarySha256);
+  } else {
+    appendFocusLog('UPDATE BIN checksum not available (proceeding with local validations only)');
+  }
+
   send({
     text: winUpdateMode === 'portable'
       ? 'Aplicando actualizacion portable...'
@@ -2593,10 +2705,22 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     indeterminate: true,
     showProgress: true
   });
+
+  const installDir = (() => {
+    try {
+      return path.dirname(app.getPath('exe'));
+    } catch {
+      return '';
+    }
+  })();
+  if (installDir) {
+    appendFocusLog('UPDATE Binary install target dir: ' + installDir);
+  }
+
   saveBinaryAttemptFingerprint();
   const launched = winUpdateMode === 'portable'
     ? launchPortableSelfUpdater(installerPath, statusPath, latestMarker, { launcherPid: process.pid })
-    : launchInstaller(installerPath, statusPath, latestMarker, { launcherPid: process.pid, handshakePath });
+    : launchInstaller(installerPath, statusPath, latestMarker, { launcherPid: process.pid, handshakePath, installDir });
   if (!launched) {
     clearBinaryAttemptFingerprint();
     appendFocusLog(`UPDATE Could not launch installer ${installerPath}`);
@@ -2616,7 +2740,7 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
     const handshake = await waitForBinaryUpdaterHandshake(handshakePath, 3500);
     if (!handshake.seen) {
       appendFocusLog('UPDATE BIN updater handshake failed; trying direct installer launch');
-      const directLaunch = launchInstallerDirect(installerPath);
+      const directLaunch = launchInstallerDirect(installerPath, { installDir });
       if (!directLaunch.ok) {
         clearBinaryAttemptFingerprint();
         appendFocusLog(`UPDATE BIN direct launch failed: ${directLaunch.error || 'unknown'}`);
@@ -3942,7 +4066,7 @@ function stageLabel(type) {
     case 'assets-copy':
       return 'Preparando assets...';
     case 'libraries':
-      return 'Descargando librerÃƒÆ’Ã‚Â­as...';
+      return 'Descargando librerÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­as...';
     case 'classes':
       return 'Descargando clases...';
     case 'classes-custom':
@@ -4000,7 +4124,7 @@ function applyLoaderOverrides(opts, loader) {
 async function runInstallOnly(event, inst, list, options = {}) {
   const loader = String(inst.loader || 'Vanilla');
   if (!['Vanilla', 'Forge', 'NeoForge', 'Fabric', 'Snapshots'].includes(loader)) {
-    throw new Error('Este loader no estÃƒÆ’Ã‚Â¡ soportado por ahora.');
+    throw new Error('Este loader no estÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ soportado por ahora.');
   }
 
   inst.addons = normalizeAddonSelection(inst.addons);
@@ -4012,7 +4136,7 @@ async function runInstallOnly(event, inst, list, options = {}) {
       required: javaSelection.required,
       maxAllowed: javaSelection.maxAllowed
     });
-    throw new Error(`No se encontrÃƒÆ’Ã‚Â³ un Java compatible para Minecraft ${inst.version}.`);
+    throw new Error(`No se encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ un Java compatible para Minecraft ${inst.version}.`);
   }
   const javaPath = javaSelection.path;
 
@@ -4767,7 +4891,7 @@ ipcMain.on('set-java-path', async (event, data) => {
 
 ipcMain.on('install-instance', async (event, data) => {
   if (!data || !data.name || !data.version) {
-    event.sender.send('install-error', 'Datos invÃƒÆ’Ã‚Â¡lidos');
+    event.sender.send('install-error', 'Datos invÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡lidos');
     return;
   }
 
@@ -4804,7 +4928,7 @@ ipcMain.on('install-instance', async (event, data) => {
   }
 
   if (activeInstalls.has(clean.id)) {
-    event.sender.send('install-error', 'Esta instancia ya se estÃƒÆ’Ã‚Â¡ descargando.');
+    event.sender.send('install-error', 'Esta instancia ya se estÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ descargando.');
     return;
   }
 
@@ -4857,12 +4981,21 @@ ipcMain.on('open-external', async (event, url) => {
 });
 
 ipcMain.on('launch-game', async (event, instanceId) => {
+  const clearPendingLaunch = () => {
+    const current = activeLaunches.get(instanceId);
+    if (current && current.pending === true) {
+      activeLaunches.delete(instanceId);
+    }
+  };
+
   if (activeLaunches.has(instanceId)) {
-    event.sender.send('launch-error', 'Ya se estÃƒÆ’Ã‚Â¡ abriendo esta instancia.');
+    event.sender.send('launch-error', 'Ya se estÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ abriendo esta instancia.');
+    clearPendingLaunch();
     return;
   }
   if (activeInstalls.has(instanceId)) {
-    event.sender.send('launch-error', 'La instancia todavÃƒÆ’Ã‚Â­a se estÃƒÆ’Ã‚Â¡ descargando.');
+    event.sender.send('launch-error', 'La instancia todavÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a se estÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ descargando.');
+    clearPendingLaunch();
     return;
   }
 
@@ -4870,14 +5003,18 @@ ipcMain.on('launch-game', async (event, instanceId) => {
   const inst = list.find(i => i.id === instanceId);
   if (!inst) {
     event.sender.send('launch-error', 'Instancia no encontrada.');
+    clearPendingLaunch();
     return;
   }
 
   const loader = String(inst.loader || 'Vanilla');
   if (!['Vanilla', 'Forge', 'NeoForge', 'Fabric', 'Snapshots'].includes(loader)) {
-    event.sender.send('launch-error', 'Este loader no estÃƒÆ’Ã‚Â¡ soportado por ahora.');
+    event.sender.send('launch-error', 'Este loader no estÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ soportado por ahora.');
+    clearPendingLaunch();
     return;
   }
+
+  activeLaunches.set(instanceId, { pending: true, since: Date.now() });
 
   const javaSelection = await selectJavaForVersion(inst.version);
   if (!javaSelection.path) {
@@ -4886,7 +5023,8 @@ ipcMain.on('launch-game', async (event, instanceId) => {
       required: javaSelection.required,
       maxAllowed: javaSelection.maxAllowed
     });
-    event.sender.send('launch-error', `No se encontrÃƒÆ’Ã‚Â³ un Java compatible para Minecraft ${inst.version}.`);
+    event.sender.send('launch-error', `No se encontrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ un Java compatible para Minecraft ${inst.version}.`);
+    clearPendingLaunch();
     return;
   }
   const javaPath = javaSelection.path;
@@ -4895,6 +5033,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
   const ensured = ensureDir(root);
   if (ensured !== true) {
     event.sender.send('launch-error', `No se pudo crear la carpeta de la instancia.\nDetalle: ${String(ensured)}`);
+    clearPendingLaunch();
     return;
   }
 
@@ -4918,7 +5057,8 @@ ipcMain.on('launch-game', async (event, instanceId) => {
 
   if (needsInstall) {
     if (activeInstalls.has(inst.id)) {
-      event.sender.send('launch-error', 'La instancia todavÃƒÆ’Ã‚Â­a se estÃƒÆ’Ã‚Â¡ descargando.');
+      event.sender.send('launch-error', 'La instancia todavÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â­a se estÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ descargando.');
+      clearPendingLaunch();
       return;
     }
     activeInstalls.set(inst.id, true);
@@ -4927,8 +5067,10 @@ ipcMain.on('launch-game', async (event, instanceId) => {
     } catch (err) {
       const msg = err ? String(err) : 'No se pudo descargar Minecraft.';
       event.sender.send('launch-error', msg);
+      clearPendingLaunch();
     } finally {
       activeInstalls.delete(inst.id);
+      clearPendingLaunch();
     }
     return;
   }
@@ -4973,6 +5115,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
   } catch (err) {
     const msg = err ? String(err) : 'No se pudo preparar el loader.';
     event.sender.send('launch-error', msg);
+    clearPendingLaunch();
     return;
   }
 
@@ -5024,6 +5167,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
     launchAuth = await ensureLaunchProfileAuth(getStoredProfile(), inst.username || 'Offline');
   } catch (err) {
     event.sender.send('launch-error', err ? String(err) : 'No se pudo validar la sesion.');
+    clearPendingLaunch();
     return;
   }
   const auth = launchAuth.authorization;
@@ -5081,6 +5225,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
         clearTimeout(startedFallback);
         const details = lastDebug ? `\nDetalle: ${lastDebug}` : '';
         event.sender.send('launch-error', `No se pudo iniciar Minecraft.${details}`);
+        clearPendingLaunch();
         return;
       }
       activeLaunches.set(inst.id, child);
@@ -5090,7 +5235,8 @@ ipcMain.on('launch-game', async (event, instanceId) => {
         const early = Date.now() - launchStart < 15000;
         if (early) {
           const details = lastDebug ? `\nDetalle: ${lastDebug}` : '';
-          event.sender.send('launch-error', `Minecraft se cerrÃƒÆ’Ã‚Â³ al iniciar (cÃƒÆ’Ã‚Â³digo ${code}).${details}`);
+          event.sender.send('launch-error', `Minecraft se cerrÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³ al iniciar (cÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â³digo ${code}).${details}`);
+          clearPendingLaunch();
         }
       });
       child.on('error', (err) => {
@@ -5098,6 +5244,7 @@ ipcMain.on('launch-game', async (event, instanceId) => {
         clearTimeout(startedFallback);
         const details = lastDebug ? `\nDetalle: ${lastDebug}` : '';
         event.sender.send('launch-error', err ? `${String(err)}${details}` : `Error al iniciar.${details}`);
+        clearPendingLaunch();
       });
 
       inst.installed = true;
@@ -5120,7 +5267,10 @@ ipcMain.on('launch-game', async (event, instanceId) => {
       clearTimeout(startedFallback);
       const details = lastDebug ? `\nDetalle: ${lastDebug}` : '';
       event.sender.send('launch-error', err ? `${String(err)}${details}` : `Error al iniciar.${details}`);
+      clearPendingLaunch();
     });
 });
+
+
 
 
