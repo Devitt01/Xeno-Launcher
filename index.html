@@ -486,6 +486,40 @@
         .version-chip:hover { border-color: var(--primary); color: white; transform: translateY(-2px); }
         .version-chip.selected { background: var(--secondary); border-color: var(--secondary); color: white; box-shadow: 0 0 10px rgba(43, 109, 255, 0.45); }
 
+        /* Scrollbars personalizadas para Crear Instancia */
+        #modal-create-instance .loader-sidebar,
+        #modal-create-instance .version-content {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(68, 244, 255, 0.58) rgba(255, 255, 255, 0.05);
+        }
+        #modal-create-instance .loader-sidebar::-webkit-scrollbar,
+        #modal-create-instance .version-content::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        #modal-create-instance .loader-sidebar::-webkit-scrollbar-track,
+        #modal-create-instance .version-content::-webkit-scrollbar-track {
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.08));
+            border-radius: 999px;
+            border: 1px solid rgba(122, 177, 255, 0.15);
+        }
+        #modal-create-instance .loader-sidebar::-webkit-scrollbar-thumb,
+        #modal-create-instance .version-content::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, rgba(68, 244, 255, 0.9), rgba(44, 123, 255, 0.9));
+            border-radius: 999px;
+            border: 2px solid rgba(6, 12, 22, 0.75);
+            box-shadow: 0 0 12px rgba(68, 244, 255, 0.3);
+        }
+        #modal-create-instance .loader-sidebar::-webkit-scrollbar-thumb:hover,
+        #modal-create-instance .version-content::-webkit-scrollbar-thumb:hover {
+            filter: brightness(1.1);
+            box-shadow: 0 0 14px rgba(68, 244, 255, 0.5);
+        }
+        #modal-create-instance .loader-sidebar::-webkit-scrollbar-corner,
+        #modal-create-instance .version-content::-webkit-scrollbar-corner {
+            background: transparent;
+        }
+
         .addon-options { margin-top: 14px; padding: 12px; background: rgba(255,255,255,0.03); border: 1px solid var(--border); border-radius: 8px; display: none; }
         .addon-options h4 { font-size: 12px; color: var(--text-main); margin-bottom: 10px; text-transform: uppercase; letter-spacing: 0.7px; }
         .addon-row { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-main); margin-bottom: 8px; }

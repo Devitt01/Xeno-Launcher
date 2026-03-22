@@ -5,7 +5,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "clean:dist": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "clean:dist": "node -e \"const fs=require('fs');['dist','dist-release'].forEach(d=>fs.rmSync(d,{recursive:true,force:true}));\"",
     "build:asar-asset": "node scripts/export-update-asar.js",
     "build:win": "electron-builder --win nsis --publish never",
     "build:win:clean": "npm run clean:dist && electron-builder --win nsis --publish never",
@@ -33,14 +33,15 @@
     "productName": "Xeno Launcher",
     "icon": "build/icon.ico",
     "directories": {
-      "output": "dist"
+      "output": "dist-release"
     },
     "files": [
       "**/*",
       "!dist/**",
       "!node_modules/.cache/**",
       "!cloudflared.exe",
-      "!*.log"
+      "!*.log",
+      "!dist-release/**"
     ],
     "win": {
       "icon": "build/icon.ico",

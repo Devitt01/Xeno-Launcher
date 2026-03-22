@@ -17,7 +17,7 @@ function resolveOutputDir(rootDir) {
   }
 
   // Auto-detect newest build output when env override is not provided.
-  const candidates = ['dist', 'dist-release'].map((dir) => path.join(rootDir, dir));
+  const candidates = ['dist-release'].map((dir) => path.join(rootDir, dir));
   let selected = null;
   for (const candidate of candidates) {
     const sourceAsar = path.join(candidate, 'win-unpacked', 'resources', 'app.asar');
@@ -29,7 +29,7 @@ function resolveOutputDir(rootDir) {
   }
   if (selected) return selected.dir;
 
-  return path.join(rootDir, 'dist');
+  return path.join(rootDir, 'dist-release');
 }
 
 function formatSize(bytes) {
@@ -69,7 +69,7 @@ function main() {
 
   if (!fs.existsSync(sourceAsar)) {
     throw new Error(
-      `No existe el archivo fuente: ${sourceAsar}. Ejecuta primero: npm run build:win o npm run build:release:win`
+      `No existe el archivo fuente: ${sourceAsar}. Ejecuta primero: npm run build:win`
     );
   }
 
