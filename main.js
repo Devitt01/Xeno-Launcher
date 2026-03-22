@@ -1156,6 +1156,46 @@ function launchInstaller(installerPath, statusFilePath, marker = '', options = {
   }
 }
 
+function launchInstallerViaScriptFile(installerPath, statusFilePath, marker = '', options = {}) {
+  try {
+    const installer = path.resolve(String(installerPath || '').trim());
+    const statusPath = path.resolve(String(statusFilePath || '').trim());
+    const handshakePath = path.resolve(String(options && options.handshakePath
+      ? options.handshakePath
+      : path.join(path.dirname(statusPath), UPDATE_HANDSHAKE_BINARY_FILE)).trim());
+    const exePath = path.resolve(app.getPath('exe'));
+    const installDir = path.resolve(String(options && options.installDir ? options.installDir : path.dirname(exePath)).trim());
+    const launcherPid = Number(options && options.launcherPid ? options.launcherPid : process.pid) || process.pid;
+    if (!installer || !statusPath || !handshakePath || !exePath || !installDir) return false;
+
+    const scriptBody = buildInstallerApplyScript({
+      installerPath: installer,
+      statusPath,
+      handshakePath,
+      marker,
+      exePath,
+      installDir,
+      launcherPid
+    });
+    const updatesDir = path.dirname(statusPath);
+    ensureDir(updatesDir);
+    const scriptPath = path.join(updatesDir, `xeno-bin-updater-${Date.now()}-${process.pid}.ps1`);
+    fs.writeFileSync(scriptPath, scriptBody, 'utf8');
+
+    return spawnDetached('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-WindowStyle',
+      'Hidden',
+      '-File',
+      scriptPath
+    ]);
+  } catch {
+    return false;
+  }
+}
+
 function launchInstallerDirect(installerPath, options = {}) {
   try {
     const installer = path.resolve(String(installerPath || '').trim());
@@ -2737,9 +2777,23 @@ async function checkAndInstallLauncherUpdate(reportStatus) {
   let binaryLaunchMethod = winUpdateMode === 'portable' ? 'portable-script' : 'setup-script';
   let binaryLaunchArgs = '';
   if (winUpdateMode === 'setup') {
-    const handshake = await waitForBinaryUpdaterHandshake(handshakePath, 3500);
+    let handshake = await waitForBinaryUpdaterHandshake(handshakePath, 3500);
     if (!handshake.seen) {
-      appendFocusLog('UPDATE BIN updater handshake failed; trying direct installer launch');
+      appendFocusLog('UPDATE BIN updater handshake failed; trying script-file relaunch');
+      const relaunched = launchInstallerViaScriptFile(installerPath, statusPath, latestMarker, {
+        launcherPid: process.pid,
+        handshakePath,
+        installDir
+      });
+      if (relaunched) {
+        handshake = await waitForBinaryUpdaterHandshake(handshakePath, 4500);
+        if (handshake.seen) {
+          binaryLaunchMethod = 'setup-script-file';
+        }
+      }
+    }
+    if (!handshake.seen) {
+      appendFocusLog('UPDATE BIN updater handshake still missing; trying direct installer launch');
       const directLaunch = launchInstallerDirect(installerPath, { installDir });
       if (!directLaunch.ok) {
         clearBinaryAttemptFingerprint();
