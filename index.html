@@ -606,7 +606,7 @@
                     <div class="news-grid">
                          <article class="news-card">
                             <h3>Test Beta</h3>
-                            <p>esta es una test para probar y avisar de errores, no pasarla a absolutamente nadie</p>
+                            <p>Esta version de prueba fue compartida unicamente con personas especificas. Su contenido es confidencial y no debe difundirse ni compartirse con terceros.</p>
                         </article>
                     </div>
                 </section>
@@ -621,6 +621,15 @@
                     </div>
                     <button class="action-btn btn-secondary" style="margin-top: 8px;" onclick="saveJavaPath()">Guardar ruta de Java</button>
                     <p class="settings-note">Si esta vacio, Xeno detecta Java automaticamente.</p>
+                    <div class="input-group" style="margin-top: 20px;">
+                        <label>Idioma</label>
+                        <select id="language-select" class="custom-input">
+                            <option value="es">Espanol</option>
+                            <option value="en">Ingles</option>
+                        </select>
+                    </div>
+                    <button class="action-btn btn-secondary" style="margin-top: 8px;" onclick="saveLanguagePreference()">Confirmar idioma</button>
+                    <p class="settings-note">Cambiar el idioma requiere reiniciar el launcher.</p>
                     <p style="font-size: 12px; color: var(--text-dim); margin-top: 10px;">Otras opciones estar&aacute;n disponibles en futuras versiones.</p>
                 </section>
                 <section id="view-skins" class="view-section">
@@ -761,6 +770,17 @@
                 </div>
             </div>
         </div>
+
+        <div id="modal-confirm-language-restart" class="modal-overlay">
+            <div class="modal-content" style="max-width: 430px;">
+                <div class="modal-header"><h3>Reiniciar launcher</h3><button class="close-modal" onclick="confirmLanguageRestart(false)">&times;</button></div>
+                <p style="color: var(--text-dim);">Para aplicar el idioma seleccionado, debes reiniciar el launcher.</p>
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button class="action-btn btn-secondary" onclick="confirmLanguageRestart(false)">Mas tarde</button>
+                    <button class="action-btn" onclick="confirmLanguageRestart(true)">Reiniciar ahora</button>
+                </div>
+            </div>
+        </div>
         
         <div id="modal-select-instance" class="modal-overlay">
             <div class="modal-content">
@@ -861,6 +881,295 @@
         let elyLoginSeq = 0;
         const pendingElyLogins = new Map();
         let loginBusy = false;
+        let currentLanguage = 'es';
+        let configuredLanguage = 'es';
+        let initialLanguageApplied = false;
+        let pendingLanguageSelection = null;
+        let pendingLanguageRestartNow = false;
+        let languageObserver = null;
+
+        const EN_TEXT_REPLACEMENTS = [
+            ['Bienvenido a ', 'Welcome to '],
+            ['No-Premium', 'Offline'],
+            ['No afiliado con Mojang Studios ni Microsoft.', 'Not affiliated with Mojang Studios or Microsoft.'],
+            ['Esta version de prueba fue compartida unicamente con personas especificas. Su contenido es confidencial y no debe difundirse ni compartirse con terceros.', 'This test build was shared only with specific people. Its content is confidential and must not be shared with anyone else.'],
+            ['El juego se descargara automaticamente al darle a Jugar.', 'The game will download automatically when you press Play.'],
+            ['El juego se descargar? autom?ticamente al darle a Jugar.', 'The game will download automatically when you press Play.'],
+            ['Cambiar el idioma requiere reiniciar el launcher.', 'Changing language requires restarting the launcher.'],
+            ['Para aplicar el idioma seleccionado, debes reiniciar el launcher.', 'To apply the selected language, you need to restart the launcher.'],
+            ['Otras opciones estaran disponibles en futuras versiones.', 'More options will be available in future versions.'],
+            ['Otras opciones estar?n disponibles en futuras versiones.', 'More options will be available in future versions.'],
+            ['Si esta vacio, Xeno detecta Java automaticamente.', 'If empty, Xeno detects Java automatically.'],
+            ['Si est? vac?o, Xeno detecta Java autom?ticamente.', 'If empty, Xeno detects Java automatically.'],
+            ['Con cuenta Ely.by la skin se gestiona desde Ely.by.', 'With an Ely.by account, skins are managed from Ely.by.'],
+            ['La skin debe ser formato PNG', 'Skin must be PNG format'],
+            ['Skin invalida. Usa 64x64, 64x32 o HD proporcional.', 'Invalid skin. Use 64x64, 64x32 or proportional HD.'],
+            ['Dimensiones invalidas. Usa 64x64, 64x32 o version HD proporcional.', 'Invalid dimensions. Use 64x64, 64x32 or proportional HD version.'],
+            ['Selecciona version para ver extras compatibles.', 'Select a version to view compatible extras.'],
+            ['No hay extras disponibles para este loader.', 'No extras available for this loader.'],
+            ['Marca los extras que quieras instalar junto con Minecraft.', 'Select the extras you want to install with Minecraft.'],
+            ['OptiFine se descarga al instalar la instancia.', 'OptiFine is downloaded when installing the instance.'],
+            ['Sodium se descarga al instalar la instancia.', 'Sodium is downloaded when installing the instance.'],
+            ['Ingresa usuario y contrasena de Ely.by', 'Enter Ely.by username and password'],
+            ['No se pudo iniciar sesion con Ely.by', 'Could not sign in with Ely.by'],
+            ['El nombre de una cuenta Ely.by se cambia desde Ely.by', 'An Ely.by account name must be changed from Ely.by'],
+            ['Ruta de Java restablecida a deteccion automatica.', 'Java path reset to automatic detection.'],
+            ['Java guardado correctamente', 'Java saved successfully'],
+            ['Ruta de Java guardada.', 'Java path saved.'],
+            ['No se pudo guardar la ruta de Java.', 'Could not save Java path.'],
+            ['No se encontro Java compatible.', 'No compatible Java was found.'],
+            ['Para MC ', 'For MC '],
+            ['necesitas Java', 'you need Java'],
+            ['Error al cargar la skin', 'Error loading skin'],
+            ['Error al leer la imagen', 'Error reading image'],
+            ['Skin cargada correctamente.', 'Skin uploaded successfully.'],
+            ['Skin cargada', 'Skin uploaded'],
+            ['Skin eliminada.', 'Skin removed.'],
+            ['Perfil actualizado', 'Profile updated'],
+            ['Sesion cerrada', 'Session closed'],
+            ['Instancia creada.', 'Instance created.'],
+            ['No se pudo obtener versiones.', 'Could not fetch versions.'],
+            ['No se pudo obtener Forge.', 'Could not fetch Forge.'],
+            ['No se pudo obtener NeoForge.', 'Could not fetch NeoForge.'],
+            ['No se pudo obtener Fabric.', 'Could not fetch Fabric.'],
+            ['No se pudo obtener Snapshots.', 'Could not fetch Snapshots.'],
+            ['No se pudo iniciar.', 'Could not start.'],
+            ['No se pudo abrir.', 'Could not open.'],
+            ['URL invalida.', 'Invalid URL.'],
+            ['Ingresa nombre', 'Enter a name'],
+            ['Ponle nombre', 'Set a name'],
+            ['Selecciona version', 'Select a version'],
+            ['Selecciona instancia', 'Select an instance'],
+            ['Instalacion completa.', 'Installation complete.'],
+            ['Instalado. Vuelve a jugar.', 'Installed. Press Play again.'],
+            ['Descarga completa.', 'Download complete.'],
+            ['Minecraft iniciado.', 'Minecraft started.'],
+            ['Error al iniciar.', 'Launch error.'],
+            ['Preparando...', 'Preparing...'],
+            ['Preparando descarga...', 'Preparing download...'],
+            ['Abriendo Minecraft', 'Launching Minecraft'],
+            ['Descargando Minecraft', 'Downloading Minecraft'],
+            ['Esto puede tardar unos segundos.', 'This may take a few seconds.'],
+            ['No tienes subida una skin', 'No skin uploaded'],
+            ['Gestiona tu skin de Minecraft para tu perfil actual.', 'Manage your Minecraft skin for your current profile.'],
+            ['Memoria RAM Asignada (GB):', 'Assigned RAM (GB):'],
+            ['Ruta de Java (Opcional)', 'Java Path (Optional)'],
+            ['Guardar ruta de Java', 'Save Java Path'],
+            ['Idioma', 'Language'],
+            ['Espanol', 'Spanish'],
+            ['Ingles', 'English'],
+            ['Confirmar idioma', 'Confirm language'],
+            ['Cambiar el idioma requiere reiniciar el launcher.', 'Changing language requires restarting the launcher.'],
+            ['El idioma ya esta aplicado.', 'Language is already applied.'],
+            ['Idioma guardado. Reinicia el launcher para aplicar cambios.', 'Language saved. Restart launcher to apply changes.'],
+            ['El idioma ya estaba aplicado.', 'Language was already applied.'],
+            ['No se pudo actualizar el idioma.', 'Could not update language.'],
+            ['Reiniciar launcher', 'Restart launcher'],
+            ['Mas tarde', 'Later'],
+            ['Reiniciar ahora', 'Restart now'],
+            ['Java requerido', 'Java required'],
+            ['Compatibilidad:', 'Compatibility:'],
+            ['Abrir guia', 'Open guide'],
+            ['Abrir gu?a', 'Open guide'],
+            ['Descargas Temurin', 'Temurin downloads'],
+            ['Mis Instancias', 'My Instances'],
+            ['Crear Instancia', 'Create Instance'],
+            ['Instalar OptiFine (requiere Forge)', 'Install OptiFine (requires Forge)'],
+            ['Instalar Sodium (requiere Fabric)', 'Install Sodium (requires Fabric)'],
+            ['Extras opcionales', 'Optional extras'],
+            ['Nombre de Usuario', 'Username'],
+            ['Editar Perfil', 'Edit Profile'],
+            ['Foto de Perfil', 'Profile Picture'],
+            ['Subir Foto', 'Upload Photo'],
+            ['Guardar Cambios', 'Save Changes'],
+            ['Cerrar Sesion', 'Sign Out'],
+            ['Cerrar Sesi&oacute;n', 'Sign Out'],
+            ['Cerrar sesi?n', 'Sign Out'],
+            ['Cerrar sesion', 'Sign Out'],
+            ['?Cerrar sesi?n?', 'Sign out?'],
+            ['&iquest;Cerrar sesi&oacute;n?', 'Sign out?'],
+            ['Cerrar', 'Close'],
+            ['Cancelar', 'Cancel'],
+            ['?Borrar instancia?', 'Delete instance?'],
+            ['&iquest;Borrar instancia?', 'Delete instance?'],
+            ['Borrar', 'Delete'],
+            ['?Quieres descargar ahora?', 'Download now?'],
+            ['&iquest;Quieres descargar ahora?', 'Download now?'],
+            ['Si eliges "No", la instancia se crea pero la descarga sera al darle a Jugar.', 'If you choose "No", the instance is created and download will start when pressing Play.'],
+            ['Si eliges "No", la instancia se crea pero la descarga ser? al darle a Jugar.', 'If you choose "No", the instance is created and download will start when pressing Play.'],
+            ['Version', 'Version'],
+            ['Versi&oacute;n', 'Version'],
+            ['Versi?n', 'Version'],
+            ['Nombre', 'Name'],
+            ['Instancia', 'Instance'],
+            ['Inicia sesion', 'Sign in'],
+            ['Inicia sesi&oacute;n', 'Sign in'],
+            ['Ninguna seleccionada', 'None selected'],
+            ['Seleccionar', 'Select'],
+            ['Abrir carpeta', 'Open folder'],
+            ['Skins', 'Skins'],
+            ['Configuracion', 'Settings'],
+            ['Configuraci&oacute;n', 'Settings'],
+            ['Configuraci?n', 'Settings'],
+            ['Inicio', 'Home'],
+            ['Novedades', "What's New"],
+            ['Invitado', 'Guest'],
+            ['No Conectado', 'Disconnected'],
+            ['Cuenta Ely.by', 'Ely.by Account'],
+            ['Cuenta Offline', 'Offline Account'],
+            ['Iniciar Sesion', 'Sign In'],
+            ['Iniciar Sesi&oacute;n', 'Sign In'],
+            ['Iniciar sesi?n', 'Sign In'],
+            ['Usuario o Email (Ely.by)', 'Username or Email (Ely.by)'],
+            ['Contrasena', 'Password'],
+            ['Contrasena', 'Password'],
+            ['Entrar con Ely.by', 'Sign in with Ely.by'],
+            ['Crear cuenta Ely.by', 'Create Ely.by account'],
+            ['Usuario (Offline)', 'Username (Offline)'],
+            ['Jugar Offline', 'Play Offline'],
+            ['Gestiona tus Instancias', 'Manage Your Instances'],
+            ['Subir Skin', 'Upload Skin'],
+            ['Skin de Minecraft', 'Minecraft Skin'],
+            ['Modelo (compatibilidad)', 'Model (compatibility)'],
+            ['Auto (recomendado)', 'Auto (recommended)'],
+            ['Classic (brazos 4px)', 'Classic (4px arms)'],
+            ['Slim / Alex (brazos 3px)', 'Slim / Alex (3px arms)'],
+            ['Eliminar Skin', 'Remove Skin'],
+            ['Aviso', 'Notice'],
+            ['Entendido', 'Understood'],
+            ['Minimizar', 'Minimize'],
+            ['Maximizar', 'Maximize'],
+            ['Restaurar', 'Restore']
+                ];
+
+        function decodeHtmlEntities(value) {
+            const raw = String(value || '');
+            if (!raw || typeof document === 'undefined') return raw;
+            const parser = document.createElement('textarea');
+            parser.innerHTML = raw;
+            return parser.value;
+        }
+
+        const EN_TEXT_REPLACEMENTS_EXPANDED = (() => {
+            const pairs = new Map();
+            EN_TEXT_REPLACEMENTS.forEach(([from, to]) => {
+                const source = String(from || '');
+                const target = String(to || '');
+                if (!source) return;
+                pairs.set(source, target);
+
+                const decodedSource = decodeHtmlEntities(source);
+                if (decodedSource && decodedSource !== source) {
+                    pairs.set(decodedSource, decodeHtmlEntities(target));
+                }
+            });
+            return Array.from(pairs.entries()).sort((a, b) => b[0].length - a[0].length);
+        })();
+
+        function normalizeLanguage(value) {
+            const lang = String(value || '').trim().toLowerCase();
+            return lang === 'en' ? 'en' : 'es';
+        }
+
+        function translateTextValue(value) {
+            let text = String(value || '');
+            if (!text || currentLanguage !== 'en') return text;
+            for (const [from, to] of EN_TEXT_REPLACEMENTS_EXPANDED) {
+                if (!from) continue;
+                text = text.split(from).join(to);
+            }
+            return text;
+        }
+
+        function translateElementAttributes(el) {
+            if (!el || el.nodeType !== Node.ELEMENT_NODE) return;
+            ['placeholder', 'title', 'aria-label'].forEach((attr) => {
+                if (!el.hasAttribute(attr)) return;
+                const raw = el.getAttribute(attr);
+                const translated = translateTextValue(raw);
+                if (translated !== raw) el.setAttribute(attr, translated);
+            });
+        }
+
+        function translateNodeTree(node) {
+            if (!node) return;
+            if (node.nodeType === Node.TEXT_NODE) {
+                const raw = node.nodeValue;
+                const translated = translateTextValue(raw);
+                if (translated !== raw) node.nodeValue = translated;
+                return;
+            }
+            if (node.nodeType !== Node.ELEMENT_NODE) return;
+            translateElementAttributes(node);
+            const children = node.childNodes || [];
+            for (let i = 0; i < children.length; i += 1) {
+                translateNodeTree(children[i]);
+            }
+        }
+
+        function observeLanguageChanges() {
+            if (currentLanguage !== 'en') return;
+            if (languageObserver || !document.body) return;
+            languageObserver = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    if (mutation.type === 'characterData') {
+                        translateNodeTree(mutation.target);
+                        return;
+                    }
+                    if (mutation.type === 'attributes') {
+                        translateElementAttributes(mutation.target);
+                        return;
+                    }
+                    if (mutation.type === 'childList' && mutation.addedNodes && mutation.addedNodes.length > 0) {
+                        mutation.addedNodes.forEach((n) => translateNodeTree(n));
+                    }
+                });
+            });
+            languageObserver.observe(document.body, {
+                childList: true,
+                subtree: true,
+                characterData: true,
+                attributes: true,
+                attributeFilter: ['placeholder', 'title', 'aria-label']
+            });
+        }
+
+        function applyLanguage(language) {
+            currentLanguage = normalizeLanguage(language);
+            document.documentElement.lang = currentLanguage;
+            setLanguageUI(currentLanguage);
+            if (currentLanguage === 'en') {
+                translateNodeTree(document.body);
+                observeLanguageChanges();
+            }
+        }
+
+        function setLanguageUI(language) {
+            const select = document.getElementById('language-select');
+            if (!select) return;
+            select.value = normalizeLanguage(language);
+        }
+
+        function saveLanguagePreference() {
+            const select = document.getElementById('language-select');
+            if (!select) return;
+            const chosen = normalizeLanguage(select.value);
+            if (chosen === normalizeLanguage(configuredLanguage)) {
+                showToast('El idioma ya esta aplicado.', 'neutral');
+                return;
+            }
+            pendingLanguageSelection = chosen;
+            openModal('modal-confirm-language-restart');
+        }
+
+        function confirmLanguageRestart(restartNow) {
+            closeModal('modal-confirm-language-restart');
+            if (!pendingLanguageSelection) return;
+            pendingLanguageRestartNow = !!restartNow;
+            if (api && api.send) {
+                api.send('set-language', { language: pendingLanguageSelection });
+            }
+        }
 
         const SKIN_MODEL_UNIT = 6;
 
@@ -1734,6 +2043,13 @@
             if (!data) return;
             if (data.ram !== undefined && data.ram !== null) setRamUI(data.ram);
             setJavaPathUI(data.javaPath || '');
+            const incomingLanguage = normalizeLanguage(data.language || 'es');
+            configuredLanguage = incomingLanguage;
+            setLanguageUI(incomingLanguage);
+            if (!initialLanguageApplied) {
+                applyLanguage(incomingLanguage);
+                initialLanguageApplied = true;
+            }
         });
 
         api && api.on && api.on('java-path-result', (event, data) => {
@@ -1746,6 +2062,30 @@
             } else {
                 showToast(data.error || 'No se pudo guardar la ruta de Java.', 'error');
             }
+        });
+
+        api && api.on && api.on('language-updated', (event, data) => {
+            if (!data || !data.ok) {
+                showToast('No se pudo actualizar el idioma.', 'error');
+                pendingLanguageSelection = null;
+                pendingLanguageRestartNow = false;
+                return;
+            }
+            const language = normalizeLanguage(data.language || 'es');
+            configuredLanguage = language;
+            setLanguageUI(language);
+            pendingLanguageSelection = null;
+
+            if (data.restartRequired) {
+                if (pendingLanguageRestartNow && api && api.send) {
+                    api.send('restart-launcher');
+                    return;
+                }
+                showToast('Idioma guardado. Reinicia el launcher para aplicar cambios.', 'neutral');
+            } else {
+                showToast('El idioma ya estaba aplicado.', 'neutral');
+            }
+            pendingLanguageRestartNow = false;
         });
 
         api && api.on && api.on('window-state', (event, data) => {
@@ -2511,13 +2851,14 @@
             marker.style.color = col;
             marker.textContent = '*';
             t.appendChild(marker);
-            t.appendChild(document.createTextNode(` ${String(msg || '')}`));
+            t.appendChild(document.createTextNode(` ${translateTextValue(msg)}`));
             c.appendChild(t);
             setTimeout(() => { t.style.opacity = 0; setTimeout(()=>t.remove(), 300); }, 3000);
         }
     </script>
 </body>
 </html>
+
 
 
 

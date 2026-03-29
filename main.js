@@ -98,14 +98,69 @@ const store = new Store({
     forgeMcVersions: [],
     neoforgeMcVersions: [],
     fabricMcVersions: [],
-    snapshotMcVersions: []
+    snapshotMcVersions: [],
+    language: 'es'
   }
 });
+
+const SUPPORTED_LANGUAGES = new Set(['es', 'en']);
+
+function sanitizeLanguage(value, fallback = 'es') {
+  const raw = String(value || '').trim().toLowerCase();
+  if (SUPPORTED_LANGUAGES.has(raw)) return raw;
+  const safeFallback = String(fallback || 'es').trim().toLowerCase();
+  return SUPPORTED_LANGUAGES.has(safeFallback) ? safeFallback : 'es';
+}
+
+function getLauncherLanguage() {
+  const stored = store.get('language', 'es');
+  const normalized = sanitizeLanguage(stored, 'es');
+  if (stored !== normalized) store.set('language', normalized);
+  return normalized;
+}
+
+const SPLASH_TEXT_REPLACEMENTS_EN = [
+  ['Buscando actualizaciones del launcher...', 'Checking launcher updates...'],
+  ['Buscando actualizaciones...', 'Checking updates...'],
+  ['No se pudo verificar actualizaciones del launcher. Continuando...', 'Could not check launcher updates. Continuing...'],
+  ['Actualizaciones del launcher en modo manual.', 'Launcher updates are in manual mode.'],
+  ['Preparando launcher...', 'Preparing launcher...'],
+  ['Cargando interfaz...', 'Loading interface...'],
+  ['Nueva version del launcher ', 'New launcher version '],
+  [' encontrada...', ' found...'],
+  ['Nueva compilacion del launcher encontrada...', 'New launcher build found...'],
+  ['Descargando actualizacion del launcher...', 'Downloading launcher update...'],
+  ['Instalando actualizacion del launcher...', 'Installing launcher update...'],
+  ['Actualizacion del launcher lista. Reiniciando...', 'Launcher update ready. Restarting...'],
+  ['Launcher actualizado.', 'Launcher is up to date.'],
+  ['Parche ya intentado hace un momento. Continuando launcher...', 'Patch was attempted a moment ago. Continuing launcher...'],
+  ['Verificando parche aplicado recientemente. Continuando launcher...', 'Verifying recently applied patch. Continuing launcher...'],
+  ['No hay actualizaciones del launcher.', 'No launcher updates available.'],
+  ['No se pudo iniciar el instalador.', 'Could not start the installer.'],
+  ['No se pudo confirmar el inicio del parche del launcher.', 'Could not confirm launcher patch start.'],
+  ['No se pudo aplicar el parche del launcher.', 'Could not apply launcher patch.'],
+  ['Aplicando parche del launcher...', 'Applying launcher patch...'],
+  ['Aplicando parche del launcher (se pediran permisos de administrador)...', 'Applying launcher patch (administrator permission may be requested)...'],
+  ['Parche aplicado. Reiniciando launcher...', 'Patch applied. Restarting launcher...'],
+  ['Parche descargado. Esperando permisos y reinicio del launcher...', 'Patch downloaded. Waiting for permissions and launcher restart...']
+];
+
+function translateSplashText(value) {
+  const text = String(value || '').trim();
+  if (!text) return text;
+  if (getLauncherLanguage() !== 'en') return text;
+
+  let translated = text;
+  for (const [from, to] of SPLASH_TEXT_REPLACEMENTS_EN) {
+    translated = translated.split(from).join(to);
+  }
+  return translated;
+}
 
 let mainWindow = null;
 let splashWindow = null;
 let pendingSplashStatus = {
-  text: 'Buscando actualizaciones...',
+  text: translateSplashText('Buscando actualizaciones...'),
   phase: 'checking',
   progress: null,
   indeterminate: true,
@@ -4349,6 +4404,9 @@ function normalizeSplashPayload(payload) {
 function sendSplashStatus(payload) {
   const normalized = normalizeSplashPayload(payload);
   if (!normalized) return;
+  if (typeof normalized.text === 'string') {
+    normalized.text = translateSplashText(normalized.text);
+  }
 
   pendingSplashStatus = {
     ...pendingSplashStatus,
@@ -4871,12 +4929,41 @@ function buildSettingsPayload() {
   }
   return {
     ram: safeRam,
-    javaPath: store.get('javaPath', '')
+    javaPath: store.get('javaPath', ''),
+    language: getLauncherLanguage()
   };
+
 }
 
 ipcMain.on('get-settings', (event) => {
   event.reply('settings-data', buildSettingsPayload());
+});
+
+ipcMain.on('set-language', (event, data) => {
+  const previous = getLauncherLanguage();
+  const requested = data && typeof data === 'object' ? data.language : data;
+  const language = sanitizeLanguage(requested, previous);
+  const changed = language !== previous;
+
+  if (changed) {
+    store.set('language', language);
+  }
+
+  event.reply('settings-data', buildSettingsPayload());
+  event.reply('language-updated', {
+    ok: true,
+    language,
+    changed,
+    restartRequired: changed
+  });
+});
+
+ipcMain.on('restart-launcher', () => {
+  try {
+    app.relaunch();
+  } finally {
+    app.exit(0);
+  }
 });
 
 ipcMain.on('set-java-path', async (event, data) => {
